@@ -3,21 +3,23 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
-const nodemailer = require('nodemailer'); // changed
+const nodemailer = require('nodemailer'); // changed from Resend
 const User = require('../models/User');
 const OTP = require('../models/OTP');
 const auth = require('../middleware/auth');
 
-// Brevo SMTP setup - replaces Resend
+// Brevo SMTP setup - port 465 fixes Render timeout
 const transporter = nodemailer.createTransport({
   host: "smtp-relay.brevo.com",
   port: 465,
-  secure: false,
+  secure: true, // required for 465
   auth: {
     user: process.env.BREVO_USER,
     pass: process.env.BREVO_KEY
   },
-  connectionTimeout: 10000
+  connectionTimeout: 10000,
+  greetingTimeout: 10000,
+  socketTimeout: 10000
 });
 
 // POST /api/auth/send-otp
@@ -42,8 +44,8 @@ router.post('/send-otp', async (req, res) => {
 
     console.log('Sending via Brevo...')
     await transporter.sendMail({
-      from: '"StudyPlanner" <dmahi3224@gmail.com>', // Your gmail now
-      to: email, // Now works for ANY email
+      from: '"StudyPlanner" <dmahi3224@gmail.com>', // Must be verified in Brevo
+      to: email,
       subject: 'Your StudyPlanner OTP Code',
       html: `
         <div style="font-family: Arial, sans-serif; padding: 20px;">
