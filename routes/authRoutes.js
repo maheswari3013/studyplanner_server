@@ -30,18 +30,21 @@ router.post('/send-otp', async (req, res) => {
     console.log('OTP saved to DB:', otp)
 
     // Create transporter INSIDE the route so it picks up env vars fresh
-    const transporter = nodemailer.createTransport({
-      host: 'smtp.gmail.com',
-      port: 465,
-      secure: true, // true for 465
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS
-      },
-      family: 4,
-      connectionTimeout: 10000, // fail in 10s instead of 2min
-      socketTimeout: 10000
-    })
+   const transporter = nodemailer.createTransport({
+  host: '64.233.184.108', // Gmail IPv4 instead of smtp.gmail.com
+  port: 465,
+  secure: true,
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS
+  },
+  tls: {
+    servername: 'smtp.gmail.com' // TLS cert still needs the domain name
+  },
+  family: 4,
+  connectionTimeout: 10000,
+  socketTimeout: 10000
+})
 
     console.log('Transporter created, sending mail...')
     
