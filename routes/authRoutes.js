@@ -8,14 +8,19 @@ const User = require('../models/User');
 const OTP = require('../models/OTP');
 const auth = require('../middleware/auth');
 
-// Email transporter - uses Gmail App Password
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  host: 'smtp.gmail.com',
+  port: 587,
+  secure: false, // use TLS
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS
+  },
+  family: 4, // Force IPv4
+  tls: {
+    rejectUnauthorized: false
   }
-});
+})
 
 // POST /api/auth/send-otp
 router.post('/send-otp', async (req, res) => {
