@@ -3,11 +3,12 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
-const nodemailer = require('nodemailer');
+const { Resend } = require('resend'); // changed
 const User = require('../models/User');
 const OTP = require('../models/OTP');
 const auth = require('../middleware/auth');
 
+const resend = new Resend(process.env.RESEND_API_KEY); // changed
 
 // POST /api/auth/send-otp
 router.post('/send-otp', async (req, res) => {
@@ -29,27 +30,9 @@ router.post('/send-otp', async (req, res) => {
     await OTP.create({ email, otp, expiresAt });
     console.log('OTP saved to DB:', otp)
 
-    // Create transporter INSIDE the route so it picks up env vars fresh
-   const transporter = nodemailer.createTransport({
-  host: '64.233.184.108', // Gmail IPv4 instead of smtp.gmail.com
-  port: 465,
-  secure: true,
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
-  },
-  tls: {
-    servername: 'smtp.gmail.com' // TLS cert still needs the domain name
-  },
-  family: 4,
-  connectionTimeout: 10000,
-  socketTimeout: 10000
-})
-
-    console.log('Transporter created, sending mail...')
-    
-    await transporter.sendMail({
-      from: `"StudyPlanner" <${process.env.EMAIL_USER}>`,
+    console.log('Sending via Resend...')
+    const { data, error } = await resend.emails.send({
+      from: 'StudyPlanner <onboarding@resend.dev>', // Use this until you verify domain
       to: email,
       subject: 'Your StudyPlanner OTP Code',
       html: `
@@ -62,7 +45,12 @@ router.post('/send-otp', async (req, res) => {
       `
     });
 
-    console.log('Mail sent successfully')
+    if (error) {
+      console.error('Resend error:', error);
+      return res.status(500).json({ msg: 'Failed to send OTP' });
+    }
+
+    console.log('Mail sent successfully:', data.id)
     res.json({ msg: 'OTP sent successfully' });
     
   } catch (err) {
