@@ -3,12 +3,21 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
-const { Resend } = require('resend'); // changed
+const nodemailer = require('nodemailer'); // changed
 const User = require('../models/User');
 const OTP = require('../models/OTP');
 const auth = require('../middleware/auth');
 
-const resend = new Resend(process.env.RESEND_API_KEY); // changed
+// Brevo SMTP setup - replaces Resend
+const transporter = nodemailer.createTransport({
+  host: "smtp-relay.brevo.com",
+  port: 587,
+  secure: false,
+  auth: {
+    user: process.env.BREVO_USER,
+    pass: process.env.BREVO_KEY
+  }
+});
 
 // POST /api/auth/send-otp
 router.post('/send-otp', async (req, res) => {
@@ -30,10 +39,10 @@ router.post('/send-otp', async (req, res) => {
     await OTP.create({ email, otp, expiresAt });
     console.log('OTP saved to DB:', otp)
 
-    console.log('Sending via Resend...')
-    const { data, error } = await resend.emails.send({
-      from: 'StudyPlanner <onboarding@resend.dev>', // Use this until you verify domain
-      to: email,
+    console.log('Sending via Brevo...')
+    await transporter.sendMail({
+      from: '"StudyPlanner" <dmahi3224@gmail.com>', // Your gmail now
+      to: email, // Now works for ANY email
       subject: 'Your StudyPlanner OTP Code',
       html: `
         <div style="font-family: Arial, sans-serif; padding: 20px;">
@@ -45,12 +54,7 @@ router.post('/send-otp', async (req, res) => {
       `
     });
 
-    if (error) {
-      console.error('Resend error:', error);
-      return res.status(500).json({ msg: 'Failed to send OTP' });
-    }
-
-    console.log('Mail sent successfully:', data.id)
+    console.log('Mail sent successfully to:', email)
     res.json({ msg: 'OTP sent successfully' });
     
   } catch (err) {
