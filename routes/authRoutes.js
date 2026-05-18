@@ -2,131 +2,35 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const crypto = require('crypto');
-const nodemailer = require('nodemailer'); // changed from Resend
 const User = require('../models/User');
-const OTP = require('../models/OTP');
 const auth = require('../middleware/auth');
 
-// Brevo SMTP setup - port 465 fixes Render timeout
-const transporter = nodemailer.createTransport({
-  host: "smtp-relay.brevo.com",
-  port: 465,
-  secure: true, // required for 465
-  auth: {
-    user: process.env.BREVO_USER,
-    pass: process.env.BREVO_KEY
-  },
-  connectionTimeout: 10000,
-  greetingTimeout: 10000,
-  socketTimeout: 10000
-});
-
-// POST /api/auth/send-otp
-router.post('/send-otp', async (req, res) => {
-  console.log('HIT /send-otp route at', new Date().toISOString())
-  console.log('Body:', req.body)
-  
-  const { email } = req.body;
-  if (!email) {
-    console.log('No email provided')
-    return res.status(400).json({ msg: 'Email required' });
-  }
-
-  try {
-    const otp = crypto.randomInt(100000, 999999).toString();
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 min
-
-    console.log('Generating OTP for:', email)
-    await OTP.deleteMany({ email });
-    await OTP.create({ email, otp, expiresAt });
-    console.log('OTP saved to DB:', otp)
-
-    console.log('Sending via Brevo...')
-    await transporter.sendMail({
-      from: '"StudyPlanner" <dmahi3224@gmail.com>', // Must be verified in Brevo
-      to: email,
-      subject: 'Your StudyPlanner OTP Code',
-      html: `
-        <div style="font-family: Arial, sans-serif; padding: 20px;">
-          <h2>Your OTP Code</h2>
-          <h1 style="color: #4F46E5; letter-spacing: 5px;">${otp}</h1>
-          <p>This code expires in 15 minutes.</p>
-          <p>If you didn't request this, ignore this email.</p>
-        </div>
-      `
-    });
-
-    console.log('Mail sent successfully to:', email)
-    res.json({ msg: 'OTP sent successfully' });
-    
-  } catch (err) {
-    console.error('SEND OTP ERROR:', err.message);
-    res.status(500).json({ msg: 'Failed to send OTP' });
-  }
-});
-
-// POST /api/auth/login - requires OTP
-router.post('/login', async (req, res) => {
-  const { email, password, otp } = req.body;
-  
-  try {
-    const otpRecord = await OTP.findOne({ email, otp });
-    if (!otpRecord) return res.status(400).json({ msg: 'Invalid OTP' });
-    if (otpRecord.expiresAt < new Date()) return res.status(400).json({ msg: 'OTP expired' });
-
-    await OTP.deleteOne({ _id: otpRecord._id });
-
-    const user = await User.findOne({ email });
-    if (!user) return res.status(400).json({ msg: 'Invalid credentials' });
-
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return res.status(400).json({ msg: 'Invalid credentials' });
-
-    const payload = { id: user.id };
-    jwt.sign(
-      payload,
-      process.env.JWT_SECRET,
-      { expiresIn: '5d' },
-      (err, token) => {
-        if (err) throw err;
-        const userData = { id: user.id, name: user.name, email: user.email };
-        res.json({ token, user: userData });
-      }
-    );
-  } catch (err) {
-    console.error('Login error:', err.message);
-    res.status(500).send('Server error');
-  }
-});
-
-// POST /api/auth/register - requires OTP
+// POST /api/auth/register - Direct register, no OTP
 router.post('/register', async (req, res) => {
-  const { name, email, password, otp } = req.body;
+  const { name, email, password } = req.body;
   
   try {
-    const otpRecord = await OTP.findOne({ email, otp });
-    if (!otpRecord) return res.status(400).json({ msg: 'Invalid OTP' });
-    if (otpRecord.expiresAt < new Date()) return res.status(400).json({ msg: 'OTP expired' });
-
-    await OTP.deleteOne({ _id: otpRecord._id });
-
     let user = await User.findOne({ email });
     if (user) return res.status(400).json({ msg: 'User already exists' });
 
-    user = new User({ name, email, password });
+    user = new User({ name, email, password }); // theme defaults to 'light'
     const salt = await bcrypt.genSalt(10);
     user.password = await bcrypt.hash(password, salt);
     await user.save();
 
-    const payload = { id: user.id };
+    const payload = { id: user._id }; // Changed: user.id -> user._id
     jwt.sign(
       payload,
       process.env.JWT_SECRET,
       { expiresIn: '5d' },
       (err, token) => {
         if (err) throw err;
-        const userData = { id: user.id, name: user.name, email: user.email };
+        const userData = { 
+          _id: user._id, // Changed: id -> _id
+          name: user.name, 
+          email: user.email,
+          theme: user.theme // ADD THIS for ThemeContext
+        };
         res.json({ token, user: userData });
       }
     );
@@ -136,10 +40,43 @@ router.post('/register', async (req, res) => {
   }
 });
 
-// GET /api/auth/user - Get logged in user data
+// POST /api/auth/login - Direct login, no OTP
+router.post('/login', async (req, res) => {
+  const { email, password } = req.body;
+  
+  try {
+    const user = await User.findOne({ email });
+    if (!user) return res.status(400).json({ msg: 'Invalid credentials' });
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) return res.status(400).json({ msg: 'Invalid credentials' });
+
+    const payload = { id: user._id }; // Changed: user.id -> user._id
+    jwt.sign(
+      payload,
+      process.env.JWT_SECRET,
+      { expiresIn: '5d' },
+      (err, token) => {
+        if (err) throw err;
+        const userData = { 
+          _id: user._id, // Changed: id -> _id
+          name: user.name, 
+          email: user.email,
+          theme: user.theme // ADD THIS
+        };
+        res.json({ token, user: userData });
+      }
+    );
+  } catch (err) {
+    console.error('Login error:', err.message);
+    res.status(500).send('Server error');
+  }
+});
+
+// GET /api/auth/user
 router.get('/user', auth, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select('-password');
+    const user = await User.findById(req.user._id).select('-password'); // Changed: req.user.id -> req.user._id
     if (!user) return res.status(404).json({ msg: 'User not found' });
     res.json(user);
   } catch (err) {
@@ -148,18 +85,21 @@ router.get('/user', auth, async (req, res) => {
   }
 });
 
-// PATCH /api/auth/profile - Update user profile
+// PATCH /api/auth/profile
 router.patch('/profile', auth, async (req, res) => {
-  const { name, email } = req.body;
+  const { name, email, theme } = req.body; // ADD theme
   try {
-    const existing = await User.findOne({ email, _id: { $ne: req.user.id } });
+    const existing = await User.findOne({ email, _id: { $ne: req.user._id } }); // Changed: req.user.id -> req.user._id
     if (existing) {
       return res.status(400).json({ msg: 'Email already in use' });
     }
 
+    const updateData = { name, email };
+    if (theme) updateData.theme = theme; // ADD THIS for ThemeContext
+
     const user = await User.findByIdAndUpdate(
-      req.user.id,
-      { name, email },
+      req.user._id, // Changed: req.user.id -> req.user._id
+      updateData,
       { new: true, runValidators: true }
     ).select('-password');
     
@@ -175,7 +115,7 @@ router.post('/change-password', auth, async (req, res) => {
   const { currentPassword, newPassword } = req.body;
   
   try {
-    const user = await User.findById(req.user.id);
+    const user = await User.findById(req.user._id); // Changed: req.user.id -> req.user._id
     if (!user) return res.status(404).json({ msg: 'User not found' });
 
     const isMatch = await bcrypt.compare(currentPassword, user.password);

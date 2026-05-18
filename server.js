@@ -1,6 +1,7 @@
 const express = require('express');
 const mongoose = require('mongoose');
-const cors = require('cors'); // add this
+const cors = require('cors');
+const errorHandler = require('./middleware/errorHandler'); 
 require('dotenv').config();
 
 const app = express();
@@ -22,9 +23,27 @@ app.use(cors({
 }));
 
 app.use(express.json());
+
+// Routes
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/exams', require('./routes/examRoutes'));
 app.use('/api/schedule', require('./routes/scheduleRoutes'));
+// REMOVED: sessionRoutes - StudyTimer.jsx uses /api/schedule/log now
 
-mongoose.connect(process.env.MONGO_URI).then(() => console.log('MongoDB connected'));
-app.listen(process.env.PORT || 5000, () => console.log('Server running'));
+// Health check for Render
+app.get('/', (req, res) => res.send('API Running'));
+
+// Error handler - ONLY USE THE IMPORTED ONE
+app.use(errorHandler);
+
+// DB + Server start with error handling
+mongoose.connect(process.env.MONGO_URI)
+  .then(() => {
+    console.log('MongoDB connected');
+    const PORT = process.env.PORT || 5000;
+    app.listen(PORT, () => console.log(`Server running on ${PORT}`));
+  })
+  .catch(err => {
+    console.error('MongoDB connection error:', err);
+    process.exit(1);
+  });

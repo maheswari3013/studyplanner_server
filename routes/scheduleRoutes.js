@@ -18,7 +18,7 @@ const getOAuth2Client = () => new google.auth.OAuth2(
 // GET /api/schedule - Get all blocks for calendar
 router.get('/', auth, async (req, res) => {
   try {
-    const blocks = await StudyBlock.find({ userId: req.user.id }).sort({ date: 1, startTime: 1 });
+    const blocks = await StudyBlock.find({ userId: req.user._id }).sort({ date: 1, startTime: 1 }); // Changed
     res.json(blocks);
   } catch (err) {
     console.error('Schedule fetch error:', err.message);
@@ -29,7 +29,7 @@ router.get('/', auth, async (req, res) => {
 // GET /api/schedule/today
 router.get('/today', auth, async (req, res) => {
   try {
-    const userId = req.user.id;
+    const userId = req.user._id; // Changed
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
     const endOfDay = new Date();
@@ -50,7 +50,7 @@ router.get('/today', auth, async (req, res) => {
 // GET /api/schedule/stats
 router.get('/stats', auth, async (req, res) => {
   try {
-    const userId = req.user.id;
+    const userId = req.user._id; // Changed
 
     const total = await StudyBlock.countDocuments({ userId, isBreak: false });
     const completed = await StudyBlock.countDocuments({ userId, completed: true, isBreak: false });
@@ -80,11 +80,11 @@ router.get('/stats', auth, async (req, res) => {
 // GET /api/schedule/exams - Get all saved exams with progress
 router.get('/exams', auth, async (req, res) => {
   try {
-    const exams = await Exam.find({ userId: req.user.id }).sort({ examDate: 1 }).lean();
+    const exams = await Exam.find({ userId: req.user._id }).sort({ examDate: 1 }).lean(); // Changed
 
     for (let exam of exams) {
       const blocks = await StudyBlock.find({
-        userId: req.user.id,
+        userId: req.user._id, // Changed
         subject: exam.subject,
         isBreak: false,
         isGenerated: true
@@ -112,7 +112,7 @@ router.get('/exams', auth, async (req, res) => {
 router.post('/generate', auth, async (req, res) => {
   try {
     const { exams, config } = req.body;
-    const userId = req.user.id;
+    const userId = req.user._id; // Changed
 
     if (!exams || exams.length === 0) {
       return res.status(400).json({ msg: 'No exams provided' });
@@ -133,7 +133,6 @@ router.post('/generate', auth, async (req, res) => {
     const blocksToSave = result.schedule.flatMap(day =>
       day.sessions.map(s => ({
         userId,
-        // examId: s.examId, // Remove this line - PlanSetup exams have no _id
         subject: s.examName,
         topic: s.topicName,
         date: s.date,
@@ -166,7 +165,7 @@ router.post('/generate', auth, async (req, res) => {
 // GET /api/schedule/export/pdf - Printable weekly timetable
 router.get('/export/pdf', auth, async (req, res) => {
   try {
-    const userId = req.user.id;
+    const userId = req.user._id; // Changed
 
     const startDate = new Date();
     startDate.setHours(0, 0, 0, 0);
@@ -233,16 +232,16 @@ router.get('/export/pdf', auth, async (req, res) => {
         @page { size: A4 landscape; margin: 10mm; }
         body { font-family: Arial, sans-serif; margin: 0; }
         h1 { text-align: center; margin: 0 0 10px 0; font-size: 24px; }
-      .subtitle { text-align: center; margin-bottom: 15px; color: #666; }
+     .subtitle { text-align: center; margin-bottom: 15px; color: #666; }
         table { width: 100%; border-collapse: collapse; table-layout: fixed; }
         th { background: #1F2937; color: white; padding: 8px; font-size: 12px; }
         td { border: 1px solid #D1D5DB; vertical-align: top; padding: 2px; height: 45px; }
-      .time-cell { width: 60px; background: #F3F4F6; font-weight: bold; text-align: center; font-size: 11px; }
-      .day-cell { width: calc((100% - 60px) / 7); }
-      .block { color: white; padding: 4px; margin: 1px 0; border-radius: 4px; font-size: 9px; line-height: 1.2; overflow: hidden; }
-      .legend { margin-top: 10px; display: flex; gap: 15px; justify-content: center; flex-wrap: wrap; }
-      .legend-item { display: flex; align-items: center; gap: 5px; font-size: 11px; }
-      .legend-color { width: 15px; height: 15px; border-radius: 3px; }
+     .time-cell { width: 60px; background: #F3F4F6; font-weight: bold; text-align: center; font-size: 11px; }
+     .day-cell { width: calc((100% - 60px) / 7); }
+     .block { color: white; padding: 4px; margin: 1px 0; border-radius: 4px; font-size: 9px; line-height: 1.2; overflow: hidden; }
+     .legend { margin-top: 10px; display: flex; gap: 15px; justify-content: center; flex-wrap: wrap; }
+     .legend-item { display: flex; align-items: center; gap: 5px; font-size: 11px; }
+     .legend-color { width: 15px; height: 15px; border-radius: 3px; }
       </style>
     </head>
     <body>
@@ -299,7 +298,7 @@ router.get('/google/auth', auth, (req, res) => {
     access_type: 'offline',
     prompt: 'consent',
     scope: ['https://www.googleapis.com/auth/calendar.events'],
-    state: req.user.id
+    state: req.user._id // Changed
   });
   res.json({ url });
 });
@@ -324,7 +323,7 @@ router.get('/google/callback', async (req, res) => {
 // POST /api/schedule/google/sync - Push blocks to calendar
 router.post('/google/sync', auth, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
+    const user = await User.findById(req.user._id); // Changed
     if (!user.googleTokens?.refresh_token) {
       return res.status(400).json({ msg: 'Connect Google Calendar first', needsAuth: true });
     }
@@ -333,13 +332,13 @@ router.post('/google/sync', auth, async (req, res) => {
     oauth2Client.setCredentials(user.googleTokens);
 
     const { credentials } = await oauth2Client.refreshAccessToken();
-    await User.findByIdAndUpdate(req.user.id, { googleTokens: credentials });
+    await User.findByIdAndUpdate(req.user._id, { googleTokens: credentials }); // Changed
     oauth2Client.setCredentials(credentials);
 
     const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
 
     const blocks = await StudyBlock.find({
-      userId: req.user.id,
+      userId: req.user._id, // Changed
       isBreak: false,
       missed: false,
       completed: false
@@ -387,7 +386,7 @@ router.post('/google/sync', auth, async (req, res) => {
 
 // DELETE /api/schedule/google/disconnect - Revoke access
 router.delete('/google/disconnect', auth, async (req, res) => {
-  await User.findByIdAndUpdate(req.user.id, { $unset: { googleTokens: 1 } });
+  await User.findByIdAndUpdate(req.user._id, { $unset: { googleTokens: 1 } }); // Changed
   res.json({ msg: 'Google Calendar disconnected' });
 });
 
@@ -395,7 +394,7 @@ router.delete('/google/disconnect', auth, async (req, res) => {
 router.patch('/:id/complete', auth, async (req, res) => {
   try {
     const block = await StudyBlock.findOneAndUpdate(
-      { _id: req.params.id, userId: req.user.id },
+      { _id: req.params.id, userId: req.user._id }, // Changed
       { completed: true, missed: false },
       { new: true }
     );
@@ -410,7 +409,7 @@ router.patch('/:id/complete', auth, async (req, res) => {
 // PATCH /api/schedule/:id/missed - TRUE Dynamic Rescheduling
 router.patch('/:id/missed', auth, async (req, res) => {
   try {
-    const userId = req.user.id;
+    const userId = req.user._id; // Changed
     const blockId = req.params.id;
 
     const missedBlock = await StudyBlock.findOneAndUpdate(
@@ -528,7 +527,7 @@ router.patch('/:id/missed', auth, async (req, res) => {
 router.patch('/:id', auth, async (req, res) => {
   try {
     const block = await StudyBlock.findOneAndUpdate(
-      { _id: req.params.id, userId: req.user.id },
+      { _id: req.params.id, userId: req.user._id }, // Changed
       { $set: req.body },
       { new: true }
     );
@@ -545,7 +544,7 @@ router.delete('/:id', auth, async (req, res) => {
   try {
     const block = await StudyBlock.findOneAndDelete({
       _id: req.params.id,
-      userId: req.user.id
+      userId: req.user._id // Changed
     });
     if (!block) return res.status(404).json({ msg: 'Block not found' });
     res.json({ msg: 'Block deleted' });
@@ -559,7 +558,7 @@ router.delete('/:id', auth, async (req, res) => {
 router.get('/export', auth, async (req, res) => {
   try {
     const blocks = await StudyBlock.find({
-      userId: req.user.id,
+      userId: req.user._id, // Changed
       isBreak: false
     }).sort({ date: 1, startTime: 1 });
     res.json(blocks);
@@ -572,7 +571,7 @@ router.get('/export', auth, async (req, res) => {
 // GET /api/schedule/progress - Progress Rings
 router.get('/progress', auth, async (req, res) => {
   try {
-    const userId = req.user.id;
+    const userId = req.user._id; // Changed
     const subjects = await StudyBlock.aggregate([
       { $match: { userId: new mongoose.Types.ObjectId(userId), isBreak: false } },
       {
@@ -600,10 +599,10 @@ router.get('/progress', auth, async (req, res) => {
 // GET /api/schedule/readiness - Confidence Tracker
 router.get('/readiness', auth, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
-    const exams = await Exam.find({ userId: req.user.id });
+    const user = await User.findById(req.user._id); // Changed
+    const exams = await Exam.find({ userId: req.user._id }); // Changed
     const scores = await Promise.all(exams.map(async exam => {
-      const blocks = await StudyBlock.find({ userId: req.user.id, subject: exam.subject, isBreak: false });
+      const blocks = await StudyBlock.find({ userId: req.user._id, subject: exam.subject, isBreak: false }); // Changed
       const total = blocks.length;
       const done = blocks.filter(b => b.completed).length;
       const completionScore = total > 0? (done / total) * 50 : 0;
@@ -658,7 +657,7 @@ router.patch('/user/confidence', auth, async (req, res) => {
   try {
     const { subject, level } = req.body;
     if (level < 1 || level > 10) return res.status(400).json({ msg: 'Level must be 1-10' });
-    const user = await User.findById(req.user.id);
+    const user = await User.findById(req.user._id); // Changed
     if (!user.subjectConfidence) user.subjectConfidence = new Map();
     user.subjectConfidence.set(subject, level);
     await user.save();
@@ -673,7 +672,7 @@ router.post('/log', auth, async (req, res) => {
   try {
     const { blockId, actualMinutes } = req.body;
     const block = await StudyBlock.findOneAndUpdate(
-      { _id: blockId, userId: req.user.id },
+      { _id: blockId, userId: req.user._id }, // Changed
       { actualDuration: actualMinutes, loggedAt: new Date(), completed: true },
       { new: true }
     );

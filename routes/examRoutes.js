@@ -7,14 +7,13 @@ const StudyBlock = require('../models/StudyBlock');
 // GET /api/exams - Get all exams for logged in user
 router.get('/', auth, async (req, res) => {
   try {
-    const exams = await Exam.find({ userId: req.user.id }).sort({ examDate: 1 });
+    const exams = await Exam.find({ userId: req.user._id }).sort({ examDate: 1 }); // Changed
     res.json(exams);
   } catch (err) {
     console.error('Get exams error:', err.message);
     res.status(500).json({ msg: 'Server error' });
   }
 });
-
 
 // POST /api/exams - Add new exam with validation
 router.post('/', auth, async (req, res) => {
@@ -58,7 +57,7 @@ router.post('/', auth, async (req, res) => {
     }
 
     const exam = new Exam({
-      userId: req.user.id, // was user
+      userId: req.user._id, // Changed: req.user.id -> req.user._id
       subject,
       examDate,
       time,
@@ -116,7 +115,7 @@ router.put('/:id', auth, async (req, res) => {
     }
 
     const exam = await Exam.findOneAndUpdate(
-      { _id: req.params.id, userId: req.user.id }, // was user
+      { _id: req.params.id, userId: req.user._id }, // Changed
       {
         subject,
         examDate,
@@ -145,12 +144,12 @@ router.delete('/:id', auth, async (req, res) => {
   try {
     const exam = await Exam.findOneAndDelete({ 
       _id: req.params.id, 
-      userId: req.user.id // was user
+      userId: req.user._id // Changed
     });
     
     if (!exam) return res.status(404).json({ msg: 'Exam not found' });
 
-    await StudyBlock.deleteMany({ examId: req.params.id, userId: req.user.id }); // was exam + user
+    await StudyBlock.deleteMany({ examId: req.params.id, userId: req.user._id }); // Changed
 
     res.json({ msg: 'Exam deleted' });
   } catch (err) {
