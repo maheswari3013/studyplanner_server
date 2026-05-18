@@ -8,29 +8,43 @@ const User = require('../models/User');
 const OTP = require('../models/OTP');
 const auth = require('../middleware/auth');
 
-const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 465,
-  secure: true, // true for port 465
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
-  },
-  family: 4
-})
 
 // POST /api/auth/send-otp
 router.post('/send-otp', async (req, res) => {
+  console.log('HIT /send-otp route at', new Date().toISOString())
+  console.log('Body:', req.body)
+  
   const { email } = req.body;
-  if (!email) return res.status(400).json({ msg: 'Email required' });
+  if (!email) {
+    console.log('No email provided')
+    return res.status(400).json({ msg: 'Email required' });
+  }
 
   try {
     const otp = crypto.randomInt(100000, 999999).toString();
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 min
 
+    console.log('Generating OTP for:', email)
     await OTP.deleteMany({ email });
     await OTP.create({ email, otp, expiresAt });
+    console.log('OTP saved to DB:', otp)
 
+    // Create transporter INSIDE the route so it picks up env vars fresh
+    const transporter = nodemailer.createTransport({
+      host: 'smtp.gmail.com',
+      port: 465,
+      secure: true, // true for 465
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS
+      },
+      family: 4,
+      connectionTimeout: 10000, // fail in 10s instead of 2min
+      socketTimeout: 10000
+    })
+
+    console.log('Transporter created, sending mail...')
+    
     await transporter.sendMail({
       from: `"StudyPlanner" <${process.env.EMAIL_USER}>`,
       to: email,
@@ -45,9 +59,11 @@ router.post('/send-otp', async (req, res) => {
       `
     });
 
+    console.log('Mail sent successfully')
     res.json({ msg: 'OTP sent successfully' });
+    
   } catch (err) {
-    console.error('Send OTP error:', err.message);
+    console.error('SEND OTP ERROR:', err.message);
     res.status(500).json({ msg: 'Failed to send OTP' });
   }
 });
