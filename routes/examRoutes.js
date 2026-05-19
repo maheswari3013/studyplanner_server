@@ -22,6 +22,7 @@ router.post('/', auth, async (req, res) => {
       subject,
       examDate,
       time,
+       location,
       difficulty,
       currentKnowledge,
       priority,
@@ -61,6 +62,7 @@ router.post('/', auth, async (req, res) => {
       subject,
       examDate,
       time,
+       location,
       difficulty,
       currentKnowledge,
       priority,
@@ -85,6 +87,7 @@ router.put('/:id', auth, async (req, res) => {
       subject,
       examDate,
       time,
+       location,
       difficulty,
       currentKnowledge,
       priority,
@@ -120,6 +123,7 @@ router.put('/:id', auth, async (req, res) => {
         subject,
         examDate,
         time,
+         location,
         difficulty,
         currentKnowledge,
         priority,
@@ -139,22 +143,27 @@ router.put('/:id', auth, async (req, res) => {
   }
 });
 
-// DELETE /api/exams/:id
-router.delete('/:id', auth, async (req, res) => {
+// DELETE /api/exams/:id - Delete exam + its study blocks
+router.delete('/:id', async (req, res, next) => {
   try {
-    const exam = await Exam.findOneAndDelete({ 
-      _id: req.params.id, 
-      userId: req.user._id // Changed
-    });
+    const exam = await Exam.findOne({ _id: req.params.id, userId: req.user._id });
     
-    if (!exam) return res.status(404).json({ msg: 'Exam not found' });
+    if (!exam) {
+      return res.status(404).json({ msg: 'Exam not found' });
+    }
 
-    await StudyBlock.deleteMany({ examId: req.params.id, userId: req.user._id }); // Changed
+    // Delete all study blocks for this exam first
+    await StudyBlock.deleteMany({ 
+      userId: req.user._id, 
+      examId: exam._id 
+    });
 
-    res.json({ msg: 'Exam deleted' });
+    // Then delete the exam
+    await Exam.findByIdAndDelete(req.params.id);
+    
+    res.json({ msg: 'Exam and related study blocks deleted' });
   } catch (err) {
-    console.error('Delete exam error:', err.message);
-    res.status(500).send('Server Error');
+    next(err);
   }
 });
 

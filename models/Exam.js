@@ -1,5 +1,4 @@
-const mongoose = require('mongoose');
-
+const mongoose=require('mongoose')
 const ExamSchema = new mongoose.Schema({
   userId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -17,6 +16,10 @@ const ExamSchema = new mongoose.Schema({
   time: {
     type: String,
     default: "09:00"
+  },
+  location: {           // ADD THIS
+    type: String,
+    default: ''
   },
   difficulty: {
     type: Number,
@@ -36,13 +39,11 @@ const ExamSchema = new mongoose.Schema({
     max: 5,
     default: 3
   },
-  // Mode 1 - hours per subject
   totalHours: {
     type: Number,
     required: false,
     min: 0
   },
-  // Mode 2 - accepts strings OR {name, hours} objects
   syllabusTopics: {
     type: [mongoose.Schema.Types.Mixed],
     default: []

@@ -99,14 +99,22 @@ router.get('/exams', auth, async (req, res) => {
       });
 
       const completedBlocks = blocks.filter(b => b.completed);
-      const totalMinutes = blocks.reduce((sum, b) => sum + b.duration, 0);
-      const completedMinutes = completedBlocks.reduce((sum, b) => sum + b.duration, 0);
+      const totalMinutes = blocks.reduce((sum, b) => sum + (b.duration || 0), 0);
+      const completedMinutes = completedBlocks.reduce((sum, b) => sum + (b.duration || 0), 0);
 
       exam.totalScheduledHours = Number((totalMinutes / 60).toFixed(1));
       exam.completedHours = Number((completedMinutes / 60).toFixed(1));
-      exam.progress = totalMinutes > 0? Math.round((completedMinutes / totalMinutes) * 100) : 0;
-      exam.daysLeft = Math.ceil((new Date(exam.examDate) - new Date()) / (1000 * 60 * 60 * 24));
+      exam.progress = totalMinutes > 0 ? Math.round((completedMinutes / totalMinutes) * 100) : 0;
+      
+      // FIX 1: Guard against null examDate
+      exam.daysLeft = exam.examDate 
+        ? Math.ceil((new Date(exam.examDate) - new Date()) / (1000 * 60 * 60 * 24))
+        : 0;
+      
       exam.totalTopics = exam.syllabusTopics?.length || 0;
+      
+      // FIX 2: Add 'date' field for CalendarView compatibility
+      exam.date = exam.examDate;
     }
 
     res.json(exams);
@@ -397,7 +405,17 @@ router.delete('/google/disconnect', auth, async (req, res) => {
   await User.findByIdAndUpdate(req.user._id, { $unset: { googleTokens: 1 } });
   res.json({ msg: 'Google Calendar disconnected' });
 });
-
+// DELETE /api/schedule/clear-all - Delete all blocks for user
+router.delete('/clear-all', auth, async (req, res) => {
+  try {
+    const result = await StudyBlock.deleteMany({ userId: req.user._id });
+    console.log(`Deleted ${result.deletedCount} blocks for user ${req.user._id}`);
+    res.json({ msg: `Deleted ${result.deletedCount} study blocks` });
+  } catch (err) {
+    console.error('Clear all error:', err.message);
+    res.status(500).json({ msg: 'Server error', error: err.message });
+  }
+});
 // PATCH /api/schedule/:id/complete
 router.patch('/:id/complete', auth, async (req, res) => {
   try {
