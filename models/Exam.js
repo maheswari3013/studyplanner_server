@@ -65,6 +65,14 @@ const ExamSchema = new mongoose.Schema({
     study: { type: Number, default: 50 },
     break: { type: Number, default: 10 }
   },
+  totalScheduledHours: {
+    type: Number,
+    default: 0
+  },
+  completedHours: {
+    type: Number,
+    default: 0
+  },
   status: {
     type: String,
     default: 'Pending'

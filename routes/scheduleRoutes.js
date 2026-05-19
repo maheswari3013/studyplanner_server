@@ -8,6 +8,7 @@ const Exam = require('../models/Exam');
 const StudyBlock = require('../models/StudyBlock');
 const { generateSchedule } = require('../utils/scheduler');
 const rateLimit = require('express-rate-limit');
+const PDFDocument = require('pdfkit');
 
 // Rate limiters - define once at top
 const pdfLimiter = rateLimit({
@@ -71,29 +72,37 @@ router.get('/stats', auth, async (req, res) => {
     const userId = req.user._id;
     const blocks = await StudyBlock.find({ userId, isBreak: false });
 
-    let totalScheduled = 0;
-    let totalCompleted = 0;
+    let total = 0;
+    let completed = 0;
+    let missed = 0;
     const bySubject = {};
 
     blocks.forEach(block => {
       const hours = (block.duration || 0) / 60;
       const subject = block.subject || 'Other';
 
-      totalScheduled += hours;
-      if (block.completed) totalCompleted += hours;
+      total += hours;
+      if (block.completed) completed += hours;
+      if (block.missed) missed += hours;
 
-      if (!bySubject[subject]) bySubject[subject] = 0;
-      bySubject[subject] += hours;
+      if (!bySubject[subject]) bySubject[subject] = { total: 0, completed: 0 };
+      bySubject[subject].total += hours;
+      if (block.completed) bySubject[subject].completed += hours;
     });
 
-    Object.keys(bySubject).forEach(key => {
-      bySubject[key] = Number(bySubject[key].toFixed(1));
-    });
+    const bySubjectArray = Object.entries(bySubject).map(([subject, data]) => ({
+      _id: subject,
+      total: Number(data.total.toFixed(1)),
+      completed: Number(data.completed.toFixed(1))
+    }));
 
     res.json({
-      totalScheduled: Number(totalScheduled.toFixed(1)),
-      totalCompleted: Number(totalCompleted.toFixed(1)),
-      bySubject
+      total: Number(total.toFixed(1)),
+      completed: Number(completed.toFixed(1)),
+      missed: Number(missed.toFixed(1)),
+      remaining: Number((total - completed - missed).toFixed(1)),
+      completionRate: total > 0? Math.round((completed / total) * 100) : 0,
+      bySubject: bySubjectArray
     });
   } catch (err) {
     console.error('Stats error:', err.message);
@@ -101,40 +110,37 @@ router.get('/stats', auth, async (req, res) => {
   }
 });
 
-// GET /api/schedule/exams - Get all saved exams with progress
+// GET /api/schedule/exams - with recalculated hours
 router.get('/exams', auth, async (req, res) => {
   try {
-    const exams = await Exam.find({ userId: req.user._id }).sort({ examDate: 1 }).lean();
-
-    for (let exam of exams) {
-      const blocks = await StudyBlock.find({
-        userId: req.user._id,
-        subject: exam.subject,
-        isBreak: false,
-        isGenerated: true
+    const userId = req.user._id;
+    const exams = await Exam.find({ userId });
+    
+    // Recalculate totalScheduledHours from actual StudyBlocks
+    const examsWithStats = await Promise.all(exams.map(async (exam) => {
+      const blocks = await StudyBlock.find({ 
+        userId, 
+        subject: exam.subject, 
+        isBreak: false 
       });
-
-      const completedBlocks = blocks.filter(b => b.completed);
-      const totalMinutes = blocks.reduce((sum, b) => sum + (b.duration || 0), 0);
-      const completedMinutes = completedBlocks.reduce((sum, b) => sum + (b.duration || 0), 0);
-
-      exam.totalScheduledHours = Number((totalMinutes / 60).toFixed(1));
-      exam.completedHours = Number((completedMinutes / 60).toFixed(1));
-      exam.progress = totalMinutes > 0? Math.round((completedMinutes / totalMinutes) * 100) : 0;
-      exam.daysLeft = exam.examDate
-      ? Math.ceil((new Date(exam.examDate) - new Date()) / (1000 * 60 * 60 * 24))
-        : 0;
-      exam.totalTopics = exam.syllabusTopics?.length || 0;
-      exam.date = exam.examDate;
-    }
-
-    res.json(exams);
+      
+      const totalHours = blocks.reduce((sum, b) => sum + b.duration / 60, 0);
+      const completedHours = blocks
+        .filter(b => b.completed)
+        .reduce((sum, b) => sum + b.duration / 60, 0);
+        
+      return {
+        ...exam.toObject(),
+        totalScheduledHours: Number(totalHours.toFixed(1)),
+        completedHours: Number(completedHours.toFixed(1))
+      };
+    }));
+    
+    res.json(examsWithStats);
   } catch (err) {
-    console.error('Exams fetch error:', err);
     res.status(500).json({ msg: 'Server Error' });
   }
 });
-
 // POST /api/schedule/generate - Generate study plan
 router.post('/generate', auth, async (req, res) => {
   try {
@@ -190,7 +196,9 @@ router.post('/generate', auth, async (req, res) => {
   }
 });
 
-// GET /api/schedule/export/pdf - Printable timetable with date range support
+
+
+// GET /api/schedule/export/pdf - Using PDFKit, works on Render
 router.get('/export/pdf', auth, pdfLimiter, async (req, res) => {
   try {
     const userId = req.user._id;
@@ -199,7 +207,8 @@ router.get('/export/pdf', auth, pdfLimiter, async (req, res) => {
     const startDate = start? new Date(start) : new Date();
     startDate.setHours(0, 0, 0, 0);
     const endDate = end? new Date(end) : new Date(startDate);
-    endDate.setDate(endDate.getDate() + (end? 1 : 7));
+    endDate.setDate(endDate.getDate() + 7);
+    endDate.setHours(23, 59, 59, 999);
 
     const blocks = await StudyBlock.find({
       userId,
@@ -209,115 +218,94 @@ router.get('/export/pdf', auth, pdfLimiter, async (req, res) => {
     }).sort({ date: 1, startTime: 1 });
 
     if (blocks.length === 0) {
-      return res.status(400).json({ msg: 'No blocks to export in selected range. Generate a schedule first.' });
+      return res.status(400).json({ 
+        msg: `No study blocks found between ${startDate.toLocaleDateString()} and ${endDate.toLocaleDateString()}. Generate a schedule first.` 
+      });
     }
 
-    const colorMap = {};
-    blocks.forEach(b => {
-      if (!colorMap[b.subject]) colorMap[b.subject] = b.color || '#3B82F6';
+    // Create PDF
+    const doc = new PDFDocument({ 
+      size: 'A4', 
+      layout: 'landscape',
+      margin: 30 
     });
 
-    const hours = Array.from({ length: 14 }, (_, i) => i + 8);
-    const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-
-    let tableRows = '';
-    hours.forEach(hour => {
-      tableRows += `<tr><td class="time-cell">${hour}:00</td>`;
-      for (let dayIdx = 0; dayIdx < 7; dayIdx++) {
-        const cellBlocks = blocks.filter(b => {
-          const bDate = new Date(b.date);
-          const bDay = bDate.getDay() === 0? 6 : bDate.getDay() - 1;
-          const bHour = parseInt(b.startTime.split(':')[0]);
-          return bDay === dayIdx && bHour === hour;
-        });
-
-        let cellContent = '';
-        cellBlocks.forEach(b => {
-          const color = colorMap[b.subject];
-          cellContent += `
-            <div class="block" style="background:${color}">
-              <strong>${b.subject}</strong><br/>
-              ${b.topic}<br/>
-              ${b.startTime} • ${b.duration}min
-            </div>
-          `;
-        });
-        tableRows += `<td class="day-cell">${cellContent}</td>`;
-      }
-      tableRows += '</tr>';
-    });
-
-    const weekStart = startDate.toLocaleDateString('en-GB');
-    const weekEnd = new Date(endDate - 1).toLocaleDateString('en-GB');
-
-    const html = `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="UTF-8">
-      <style>
-        @page { size: A4 landscape; margin: 10mm; }
-        body { font-family: Arial, sans-serif; margin: 0; }
-        h1 { text-align: center; margin: 0 0 10px 0; font-size: 24px; }
-       .subtitle { text-align: center; margin-bottom: 15px; color: #666; }
-        table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-        th { background: #1F2937; color: white; padding: 8px; font-size: 12px; }
-        td { border: 1px solid #D1D5DB; vertical-align: top; padding: 2px; height: 45px; }
-       .time-cell { width: 60px; background: #F3F4F6; font-weight: bold; text-align: center; font-size: 11px; }
-       .day-cell { width: calc((100% - 60px) / 7); }
-       .block { color: white; padding: 4px; margin: 1px 0; border-radius: 4px; font-size: 9px; line-height: 1.2; overflow: hidden; }
-       .legend { margin-top: 10px; display: flex; gap: 15px; justify-content: center; flex-wrap: wrap; }
-       .legend-item { display: flex; align-items: center; gap: 5px; font-size: 11px; }
-       .legend-color { width: 15px; height: 15px; border-radius: 3px; }
-      </style>
-    </head>
-    <body>
-      <h1>Study Schedule</h1>
-      <div class="subtitle">${weekStart} to ${weekEnd}</div>
-      <table>
-        <thead>
-          <tr>
-            <th>Time</th>
-            ${days.map(d => `<th>${d}</th>`).join('')}
-          </tr>
-        </thead>
-        <tbody>
-          ${tableRows}
-        </tbody>
-      </table>
-      <div class="legend">
-        ${Object.entries(colorMap).map(([subj, color]) => `
-          <div class="legend-item">
-            <div class="legend-color" style="background:${color}"></div>
-            <span>${subj}</span>
-          </div>
-        `).join('')}
-      </div>
-    </body>
-    </html>
-    `;
-
-    const puppeteer = require('puppeteer');
-    const browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox'] });
-    const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: 'networkidle0' });
-    const pdf = await page.pdf({
-      format: 'A4',
-      landscape: true,
-      printBackground: true
-    });
-    await browser.close();
-
+    // Set response headers
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename=study-schedule-${weekStart}.pdf`);
-    res.send(pdf);
+    res.setHeader('Content-Disposition', `attachment; filename=study-schedule-${startDate.toISOString().split('T')[0]}.pdf`);
+    
+    // Pipe PDF to response
+    doc.pipe(res);
+
+    // Title
+    doc.fontSize(20).font('Helvetica-Bold').text('Study Schedule', { align: 'center' });
+    doc.fontSize(12).font('Helvetica').text(
+      `${startDate.toLocaleDateString('en-GB')} to ${new Date(endDate.getTime() - 86400000).toLocaleDateString('en-GB')}`, 
+      { align: 'center' }
+    );
+    doc.moveDown(1.5);
+
+    // Group blocks by day
+    const daysMap = {};
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    
+    blocks.forEach(b => {
+      const d = new Date(b.date);
+      const dayKey = d.toISOString().split('T')[0];
+      if (!daysMap[dayKey]) {
+        daysMap[dayKey] = {
+          date: d,
+          dayName: dayNames[d.getDay()],
+          blocks: []
+        };
+      }
+      daysMap[dayKey].blocks.push(b);
+    });
+
+    // Sort days
+    const sortedDays = Object.values(daysMap).sort((a, b) => a.date - b.date);
+
+    // Draw each day
+    sortedDays.forEach((day, idx) => {
+      if (idx > 0) doc.moveDown(1);
+      
+      doc.fontSize(14).font('Helvetica-Bold').text(
+        `${day.dayName}, ${day.date.toLocaleDateString('en-GB')}`,
+        { underline: true }
+      );
+      doc.moveDown(0.5);
+
+      day.blocks.forEach(block => {
+        const color = block.color || '#3B82F6';
+        doc.fontSize(10).font('Helvetica-Bold')
+           .fillColor(color)
+           .text(`${block.startTime} - ${block.subject}`, { continued: false });
+        
+        doc.fontSize(9).font('Helvetica')
+           .fillColor('#000000')
+           .text(`  ${block.topic} • ${block.duration} min • ${block.type}`, { 
+             indent: 10 
+           });
+        doc.moveDown(0.3);
+      });
+    });
+
+    // Legend
+    doc.moveDown(1);
+    doc.fontSize(10).font('Helvetica-Bold').text('Subjects:', { underline: true });
+    const uniqueSubjects = [...new Set(blocks.map(b => b.subject))];
+    uniqueSubjects.forEach(subj => {
+      const color = blocks.find(b => b.subject === subj)?.color || '#3B82F6';
+      doc.fontSize(9).fillColor(color).text(`• ${subj}`, { indent: 10 });
+    });
+
+    doc.end();
 
   } catch (err) {
     console.error('PDF export error:', err);
     res.status(500).json({ msg: 'Failed to generate PDF', error: err.message });
   }
 });
-
 // GET /api/schedule/google/auth - Start OAuth flow
 router.get('/google/auth', auth, (req, res) => {
   const oauth2Client = getOAuth2Client();
