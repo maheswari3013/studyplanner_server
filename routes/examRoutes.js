@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
 const auth = require('../middleware/auth');
 const Exam = require('../models/Exam');
 const StudyBlock = require('../models/StudyBlock');
@@ -7,7 +8,7 @@ const StudyBlock = require('../models/StudyBlock');
 // GET /api/exams - Get all exams for logged in user
 router.get('/', auth, async (req, res) => {
   try {
-    const exams = await Exam.find({ userId: req.user._id }).sort({ examDate: 1 }); // Changed
+    const exams = await Exam.find({ userId: req.user._id }).sort({ examDate: 1 });
     res.json(exams);
   } catch (err) {
     console.error('Get exams error:', err.message);
@@ -22,7 +23,7 @@ router.post('/', auth, async (req, res) => {
       subject,
       examDate,
       time,
-       location,
+      location,
       difficulty,
       currentKnowledge,
       priority,
@@ -58,11 +59,11 @@ router.post('/', auth, async (req, res) => {
     }
 
     const exam = new Exam({
-      userId: req.user._id, // Changed: req.user.id -> req.user._id
+      userId: req.user._id,
       subject,
       examDate,
       time,
-       location,
+      location,
       difficulty,
       currentKnowledge,
       priority,
@@ -83,11 +84,15 @@ router.post('/', auth, async (req, res) => {
 // PUT /api/exams/:id - Update exam
 router.put('/:id', auth, async (req, res) => {
   try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ msg: 'Invalid exam ID' });
+    }
+
     const {
       subject,
       examDate,
       time,
-       location,
+      location,
       difficulty,
       currentKnowledge,
       priority,
@@ -118,12 +123,12 @@ router.put('/:id', auth, async (req, res) => {
     }
 
     const exam = await Exam.findOneAndUpdate(
-      { _id: req.params.id, userId: req.user._id }, // Changed
+      { _id: req.params.id, userId: req.user._id },
       {
         subject,
         examDate,
         time,
-         location,
+        location,
         difficulty,
         currentKnowledge,
         priority,
@@ -144,18 +149,22 @@ router.put('/:id', auth, async (req, res) => {
 });
 
 // DELETE /api/exams/:id - Delete exam + its study blocks
-router.delete('/:id', async (req, res, next) => {
+router.delete('/:id', auth, async (req, res, next) => {
   try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ msg: 'Invalid exam ID' });
+    }
+
     const exam = await Exam.findOne({ _id: req.params.id, userId: req.user._id });
     
     if (!exam) {
       return res.status(404).json({ msg: 'Exam not found' });
     }
 
-    // Delete all study blocks for this exam first
+    // Delete all study blocks for this exam first - using subject since examId isn't always set
     await StudyBlock.deleteMany({ 
       userId: req.user._id, 
-      examId: exam._id 
+      subject: exam.subject 
     });
 
     // Then delete the exam
@@ -163,7 +172,8 @@ router.delete('/:id', async (req, res, next) => {
     
     res.json({ msg: 'Exam and related study blocks deleted' });
   } catch (err) {
-    next(err);
+    console.error('Delete exam error:', err);
+    res.status(500).json({ msg: 'Server Error', error: err.message });
   }
 });
 

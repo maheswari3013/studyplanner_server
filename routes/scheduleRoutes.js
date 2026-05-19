@@ -7,6 +7,24 @@ const User = require('../models/User');
 const Exam = require('../models/Exam');
 const StudyBlock = require('../models/StudyBlock');
 const { generateSchedule } = require('../utils/scheduler');
+const rateLimit = require('express-rate-limit');
+
+// Rate limiters - define once at top
+const pdfLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 5,
+  message: { msg: 'Too many PDF exports. Try again in 1 minute.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const syncLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 3,
+  message: { msg: 'Too many syncs. Try again in 1 minute.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // Helper to create OAuth client
 const getOAuth2Client = () => new google.auth.OAuth2(
@@ -104,7 +122,7 @@ router.get('/exams', auth, async (req, res) => {
       exam.completedHours = Number((completedMinutes / 60).toFixed(1));
       exam.progress = totalMinutes > 0? Math.round((completedMinutes / totalMinutes) * 100) : 0;
       exam.daysLeft = exam.examDate
-       ? Math.ceil((new Date(exam.examDate) - new Date()) / (1000 * 60 * 60 * 24))
+      ? Math.ceil((new Date(exam.examDate) - new Date()) / (1000 * 60 * 60 * 24))
         : 0;
       exam.totalTopics = exam.syllabusTopics?.length || 0;
       exam.date = exam.examDate;
@@ -151,7 +169,8 @@ router.post('/generate', auth, async (req, res) => {
         isBreak: s.isBreak || false,
         type: s.type || 'Study',
         intervalDay: s.intervalDay,
-        priority: s.priority
+        priority: s.priority,
+        color: s.color // ← SAVE COLOR
       }))
     );
 
@@ -171,14 +190,16 @@ router.post('/generate', auth, async (req, res) => {
   }
 });
 
-// GET /api/schedule/export/pdf - Printable weekly timetable
-router.get('/export/pdf', auth, async (req, res) => {
+// GET /api/schedule/export/pdf - Printable timetable with date range support
+router.get('/export/pdf', auth, pdfLimiter, async (req, res) => {
   try {
     const userId = req.user._id;
-    const startDate = new Date();
+    const { start, end } = req.query;
+
+    const startDate = start? new Date(start) : new Date();
     startDate.setHours(0, 0, 0, 0);
-    const endDate = new Date(startDate);
-    endDate.setDate(endDate.getDate() + 7);
+    const endDate = end? new Date(end) : new Date(startDate);
+    endDate.setDate(endDate.getDate() + (end? 1 : 7));
 
     const blocks = await StudyBlock.find({
       userId,
@@ -188,14 +209,12 @@ router.get('/export/pdf', auth, async (req, res) => {
     }).sort({ date: 1, startTime: 1 });
 
     if (blocks.length === 0) {
-      return res.status(400).json({ msg: 'No blocks to export this week. Generate a schedule first.' });
+      return res.status(400).json({ msg: 'No blocks to export in selected range. Generate a schedule first.' });
     }
 
-    const palette = ['#3B82F6', '#10B981', '#F59E0B', '#8B5CF6', '#EF4444', '#06B6D4', '#EC4899', '#F97316', '#14B8A6', '#6366F1'];
     const colorMap = {};
-    const uniqueSubjects = [...new Set(blocks.map(b => b.subject))];
-    uniqueSubjects.forEach((subj, idx) => {
-      colorMap[subj] = palette[idx % palette.length];
+    blocks.forEach(b => {
+      if (!colorMap[b.subject]) colorMap[b.subject] = b.color || '#3B82F6';
     });
 
     const hours = Array.from({ length: 14 }, (_, i) => i + 8);
@@ -240,16 +259,16 @@ router.get('/export/pdf', auth, async (req, res) => {
         @page { size: A4 landscape; margin: 10mm; }
         body { font-family: Arial, sans-serif; margin: 0; }
         h1 { text-align: center; margin: 0 0 10px 0; font-size: 24px; }
-      .subtitle { text-align: center; margin-bottom: 15px; color: #666; }
+       .subtitle { text-align: center; margin-bottom: 15px; color: #666; }
         table { width: 100%; border-collapse: collapse; table-layout: fixed; }
         th { background: #1F2937; color: white; padding: 8px; font-size: 12px; }
         td { border: 1px solid #D1D5DB; vertical-align: top; padding: 2px; height: 45px; }
-      .time-cell { width: 60px; background: #F3F4F6; font-weight: bold; text-align: center; font-size: 11px; }
-      .day-cell { width: calc((100% - 60px) / 7); }
-      .block { color: white; padding: 4px; margin: 1px 0; border-radius: 4px; font-size: 9px; line-height: 1.2; overflow: hidden; }
-      .legend { margin-top: 10px; display: flex; gap: 15px; justify-content: center; flex-wrap: wrap; }
-      .legend-item { display: flex; align-items: center; gap: 5px; font-size: 11px; }
-      .legend-color { width: 15px; height: 15px; border-radius: 3px; }
+       .time-cell { width: 60px; background: #F3F4F6; font-weight: bold; text-align: center; font-size: 11px; }
+       .day-cell { width: calc((100% - 60px) / 7); }
+       .block { color: white; padding: 4px; margin: 1px 0; border-radius: 4px; font-size: 9px; line-height: 1.2; overflow: hidden; }
+       .legend { margin-top: 10px; display: flex; gap: 15px; justify-content: center; flex-wrap: wrap; }
+       .legend-item { display: flex; align-items: center; gap: 5px; font-size: 11px; }
+       .legend-color { width: 15px; height: 15px; border-radius: 3px; }
       </style>
     </head>
     <body>
@@ -290,7 +309,7 @@ router.get('/export/pdf', auth, async (req, res) => {
     await browser.close();
 
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', 'attachment; filename=study-schedule.pdf');
+    res.setHeader('Content-Disposition', `attachment; filename=study-schedule-${weekStart}.pdf`);
     res.send(pdf);
 
   } catch (err) {
@@ -329,7 +348,7 @@ router.get('/google/callback', async (req, res) => {
 });
 
 // POST /api/schedule/google/sync - Push blocks to calendar
-router.post('/google/sync', auth, async (req, res) => {
+router.post('/google/sync', auth, syncLimiter, async (req, res) => {
   try {
     const user = await User.findById(req.user._id);
     if (!user.googleTokens?.refresh_token) {
@@ -577,8 +596,12 @@ router.patch('/:id/missed', auth, async (req, res) => {
       { new: true }
     );
     if (!missedBlock) return res.status(404).json({ msg: 'Block not found' });
-    if (missedBlock.isBreak) return res.status(400).json({ msg: 'Cannot miss a break' });
-
+    if (missedBlock.isBreak) {
+      return res.status(400).json({
+        success: false,
+        msg: 'Breaks cannot be marked as missed'
+      });
+    }
     const exam = await Exam.findOne({ userId: userId, subject: missedBlock.subject });
     if (!exam) {
       return res.json({
@@ -632,6 +655,7 @@ router.patch('/:id/missed', auth, async (req, res) => {
       priority: exam.priority,
       availableHours: exam.availableHours,
       breakRatio: exam.breakRatio,
+      color: exam.color,
       syllabusTopics: [{
         name: missedBlock.topic.replace(' (Rescheduled)', ''),
         hours: totalMinutesToReschedule / 60
@@ -661,6 +685,7 @@ router.patch('/:id/missed', auth, async (req, res) => {
       type: s.type || 'Study',
       intervalDay: s.intervalDay,
       priority: s.priority,
+      color: s.color, // ← SAVE COLOR
       rescheduledFrom: missedBlock._id
     })));
 
@@ -682,22 +707,36 @@ router.patch('/:id/missed', auth, async (req, res) => {
   }
 });
 
-// PATCH /api/schedule/:id - Edit block for drag/drop
+// PATCH /api/schedule/:id - Edit block for drag/drop + duration updates
 router.patch('/:id', auth, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(400).json({ msg: 'Invalid block ID' });
     }
+
+    // Coerce numeric fields and sanitize input
+    const updateData = { ...req.body };
+    if (updateData.duration !== undefined) updateData.duration = parseInt(updateData.duration);
+    if (updateData.priority !== undefined) updateData.priority = parseInt(updateData.priority);
+    if (updateData.actualDuration !== undefined) updateData.actualDuration = parseInt(updateData.actualDuration);
+    
+    // Prevent updating protected fields
+    delete updateData._id;
+    delete updateData.userId;
+    delete updateData.isGenerated;
+    delete updateData.createdAt;
+
     const block = await StudyBlock.findOneAndUpdate(
       { _id: req.params.id, userId: req.user._id },
-      { $set: req.body },
-      { new: true }
+      { $set: updateData },
+      { new: true, runValidators: true }
     );
+    
     if (!block) return res.status(404).json({ msg: 'Block not found' });
     res.json(block);
   } catch (err) {
     console.error('Update error:', err);
-    res.status(500).json({ msg: 'Server Error' });
+    res.status(500).json({ msg: 'Server Error', error: err.message });
   }
 });
 

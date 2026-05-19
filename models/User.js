@@ -23,9 +23,11 @@ const UserSchema = new mongoose.Schema({
     refresh_token: String,
     expiry_date: Number
   },
-  // NEW: Confidence Tracker
-  subjectConfidence: { type: Map, of: Number, default: {} }, // { "Math": 7, "Physics": 5 }
-  showAffirmations: { type: Boolean, default: true }
+  subjectConfidence: { type: Map, of: Number, default: {} },
+  showAffirmations: { type: Boolean, default: true },
+  isAdmin: { type: Boolean, default: false }, // ← Changed from role
+  pushSubscription: { type: Object },
+  lastActive: { type: Date, default: Date.now }
 });
 
 module.exports = mongoose.models.User || mongoose.model('User', UserSchema);

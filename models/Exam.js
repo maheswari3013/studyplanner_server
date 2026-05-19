@@ -1,4 +1,4 @@
-const mongoose=require('mongoose')
+const mongoose = require('mongoose')
 const ExamSchema = new mongoose.Schema({
   userId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -17,9 +17,13 @@ const ExamSchema = new mongoose.Schema({
     type: String,
     default: "09:00"
   },
-  location: {           // ADD THIS
+  location: {
     type: String,
     default: ''
+  },
+  color: { // ← ADD THIS FOR SRS Color Customization
+    type: String,
+    default: '#3B82F6'
   },
   difficulty: {
     type: Number,

@@ -10,7 +10,6 @@ const mapDifficulty = (val) => {
 };
 
 const normalizeTopics = (exam) => {
-  // Mode 2: Topic-wise hours provided [{name: 'Kine', hours: 15}]
   if (Array.isArray(exam.syllabusTopics) && exam.syllabusTopics.length > 0 && typeof exam.syllabusTopics[0] === 'object') {
     return exam.syllabusTopics.map(t => ({
       name: t.name.trim(),
@@ -18,10 +17,9 @@ const normalizeTopics = (exam) => {
     }));
   }
 
-  // Mode 1: Subject totalHours provided
   if (exam.totalHours > 0) {
     const topicNames = exam.syllabusTopics?.length > 0
-  ? exam.syllabusTopics.filter(t => typeof t === 'string' && t.trim())
+     ? exam.syllabusTopics.filter(t => typeof t === 'string' && t.trim())
       : ['General'];
 
     const hoursPerTopic = exam.totalHours / topicNames.length;
@@ -31,7 +29,6 @@ const normalizeTopics = (exam) => {
     }));
   }
 
-  // Mode 3: String array fallback, 10h each
   if (Array.isArray(exam.syllabusTopics) && exam.syllabusTopics.length > 0) {
     return exam.syllabusTopics.map(t => ({
       name: t.trim(),
@@ -39,26 +36,22 @@ const normalizeTopics = (exam) => {
     })).filter(t => t.name);
   }
 
-  // Mode 4: Nothing provided
   return [{ name: 'General', hours: DEFAULT_BASE_HOURS_PER_TOPIC }];
 };
 
 const generateSchedule = (exams, config, missedBlocks = []) => {
   const result = { schedule: [], conflicts: [], warnings: [], metadata: {} };
 
-  // 0. Validate and clamp 1-5 ratings
   exams.forEach(exam => {
     exam.difficulty = Math.max(1, Math.min(5, exam.difficulty || 3));
     exam.currentKnowledge = Math.max(1, Math.min(5, exam.currentKnowledge || 3));
     if (!exam.priority) exam.priority = 3;
   });
 
-  // 1. Find date range
   const startDate = new Date(config.startDate);
   startDate.setUTCHours(0, 0, 0, 0);
   const lastExamDate = new Date(Math.max(...exams.map(e => new Date(e.examDate))));
 
-  // 2. Build availableDays from per-exam availableHours
   const availableDaysMap = new Map();
   let currentDate = new Date(startDate);
 
@@ -82,7 +75,8 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
           available: examHours,
           used: 0,
           breakRatio: exam.breakRatio,
-          subject: exam.subject
+          subject: exam.subject,
+          color: exam.color || '#3B82F6' // ← ADD COLOR
         };
         dayData.totalAvailable += examHours;
       }
@@ -97,7 +91,6 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
 
   const availableDays = Array.from(availableDaysMap.values()).sort((a, b) => a.date - b.date);
 
-  // 3. Calculate required hours with BOTH modes + PER-TOPIC VALIDATOR
   const topics = [];
   let totalRequiredHours = 0;
 
@@ -108,7 +101,6 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
     const topicsList = normalizeTopics(exam);
     const examId = exam._id? exam._id.toString() : exam.subject;
 
-    // NEW: Calculate max possible hours for this exam before examDate
     const examDate = new Date(exam.examDate);
     const daysBeforeExam = availableDays.filter(d => d.date < examDate && d.examCaps[examId]).length;
     const maxDailyHours = Math.max(...Object.values(exam.availableHours), 0);
@@ -117,7 +109,6 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
     topicsList.forEach(topic => {
       const adjustedHoursPerTopic = topic.hours * difficultyMultiplier * knowledgeMultiplier;
 
-      // NEW: Per-topic impossibility check
       if (adjustedHoursPerTopic > maxPossibleHours && maxPossibleHours > 0) {
         result.conflicts.push({
           type: 'TOPIC_IMPOSSIBLE',
@@ -137,6 +128,7 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
         examId,
         examName: exam.subject,
         examDate: exam.examDate,
+        color: exam.color || '#3B82F6', // ← ADD COLOR
         topicName: topic.name,
         baseHoursPerTopic: topic.hours,
         adjustedHoursPerTopic,
@@ -152,7 +144,6 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
 
   const totalAvailableHours = availableDays.reduce((sum, day) => sum + day.totalAvailable, 0);
 
-  // 4. CONFLICT RESOLUTION - Total hours check
   if (totalRequiredHours > totalAvailableHours) {
     const deficit = totalRequiredHours - totalAvailableHours;
     result.conflicts.push({
@@ -164,7 +155,6 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
     });
   }
 
-  // If any TOPIC_IMPOSSIBLE conflicts exist, stop early
   if (result.conflicts.some(c => c.type === 'TOPIC_IMPOSSIBLE')) {
     result.metadata = {
       totalRequiredHours,
@@ -174,7 +164,6 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
     return result;
   }
 
-  // 5. DYNAMIC RESCHEDULING: Add missed blocks back
   missedBlocks.forEach(missed => {
     const topic = topics.find(t => t.topicName === missed.topic && t.examName === missed.subject);
     if (topic) {
@@ -183,10 +172,9 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
     }
   });
 
-  // 6. AUTO-GENERATE TIMETABLE WITH BREAKS
   const sortedTopics = topics
-.filter(t => t.hoursRemaining > 0)
-.sort((a, b) => {
+   .filter(t => t.hoursRemaining > 0)
+   .sort((a, b) => {
       if (a.userPriority!== b.userPriority) return a.userPriority - b.userPriority;
       if (a.daysUntilExam!== b.daysUntilExam) return a.daysUntilExam - b.daysUntilExam;
       return b.hoursRemaining - a.hoursRemaining;
@@ -231,6 +219,7 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
           type: 'Study',
           examId: topic.examId,
           examName: topic.examName,
+          color: topic.color, // ← ADD COLOR
           topicName: topic.topicName,
           hours: actualStudyHours,
           priority: topic.userPriority,
@@ -247,8 +236,7 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
         hoursToSchedule -= actualStudyHours;
         examDayRemaining -= actualStudyHours;
 
-        const canAddBreak = currentMinutes + breakMinutes <= config.endHour * 60 &&
-          examDayRemaining > 0.01;
+        const canAddBreak = currentMinutes + breakMinutes <= config.endHour * 60 && examDayRemaining > 0.01;
 
         if (canAddBreak) {
           const breakStartHour = Math.floor(currentMinutes / 60);
@@ -262,6 +250,7 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
             type: 'Break',
             examId: topic.examId,
             examName: topic.examName,
+            color: topic.color, // ← ADD COLOR
             topicName: 'Break',
             hours: breakHours,
             date: breakStartDateTime,
@@ -290,7 +279,7 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
     }
   }
 
-  // 7. SPACED REPETITION
+  // SPACED REPETITION - BUG FIX #1 & #2
   availableDays.forEach(day => {
     day.sessions.filter(s => s.type === 'Study').forEach(session => {
       const examCap = day.examCaps[session.examId];
@@ -310,39 +299,49 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
           return eId === session.examId;
         });
 
-        if (reviewDay && matchingExam && reviewDate < new Date(matchingExam.examDate)) {
+        // BUG FIX #1: Don't schedule review on/after exam day
+        const dayBeforeExam = new Date(matchingExam.examDate);
+        dayBeforeExam.setDate(dayBeforeExam.getDate() - 1);
+        dayBeforeExam.setHours(23, 59, 59, 999);
+
+        if (reviewDay && matchingExam && reviewDate <= dayBeforeExam) {
           const reviewExamCap = reviewDay.examCaps[session.examId];
           if (!reviewExamCap) return;
 
           const reviewHours = 0.5;
           const reviewMinutes = reviewHours * 60;
 
+          // BUG FIX #2: Check both exam cap AND day end time
           if (reviewExamCap.available - reviewExamCap.used >= reviewHours) {
             let currentMinutes = config.startHour * 60 + reviewDay.usedHours * 60;
-            if (currentMinutes + reviewMinutes <= config.endHour * 60) {
-              const startHour = Math.floor(currentMinutes / 60);
-              const startMin = Math.round(currentMinutes % 60);
-              const startTime = `${String(startHour).padStart(2, '0')}:${String(startMin).padStart(2, '0')}`;
+            if (currentMinutes + reviewMinutes > config.endHour * 60) return; // Past day end
 
-              const reviewStartDateTime = new Date(reviewDay.date);
-              reviewStartDateTime.setUTCHours(startHour, startMin, 0, 0);
+            const remainingDayHours = (config.endHour * 60 - currentMinutes) / 60;
+            if (remainingDayHours < reviewHours) return; // Not enough room in day
 
-              reviewDay.sessions.push({
-                type: 'Review',
-                examId: session.examId,
-                examName: session.examName,
-                topicName: session.topicName,
-                hours: reviewHours,
-                intervalDay: interval,
-                date: reviewStartDateTime,
-                startTime,
-                duration: reviewMinutes,
-                isBreak: false,
-                isGenerated: true
-              });
-              reviewExamCap.used += reviewHours;
-              reviewDay.usedHours += reviewHours;
-            }
+            const startHour = Math.floor(currentMinutes / 60);
+            const startMin = Math.round(currentMinutes % 60);
+            const startTime = `${String(startHour).padStart(2, '0')}:${String(startMin).padStart(2, '0')}`;
+
+            const reviewStartDateTime = new Date(reviewDay.date);
+            reviewStartDateTime.setUTCHours(startHour, startMin, 0, 0);
+
+            reviewDay.sessions.push({
+              type: 'Review',
+              examId: session.examId,
+              examName: session.examName,
+              color: session.color, // ← ADD COLOR
+              topicName: session.topicName,
+              hours: reviewHours,
+              intervalDay: interval,
+              date: reviewStartDateTime,
+              startTime,
+              duration: reviewMinutes,
+              isBreak: false,
+              isGenerated: true
+            });
+            reviewExamCap.used += reviewHours;
+            reviewDay.usedHours += reviewHours;
           }
         }
       });
@@ -366,7 +365,8 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
       adjustedHours: t.adjustedHoursPerTopic,
       difficulty: t.difficulty,
       knowledgeLevel: t.knowledgeLevel,
-      priority: t.userPriority
+      priority: t.userPriority,
+      color: t.color
     })),
     exams: exams.map(e => ({
       subject: e.subject,
@@ -376,6 +376,7 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
       priority: e.priority,
       availableHours: e.availableHours,
       breakRatio: e.breakRatio,
+      color: e.color,
       mode: e.totalHours? 'subject' : 'topic'
     }))
   };

@@ -28,7 +28,9 @@ app.use(express.json());
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/exams', require('./routes/examRoutes'));
 app.use('/api/schedule', require('./routes/scheduleRoutes'));
-// REMOVED: sessionRoutes - StudyTimer.jsx uses /api/schedule/log now
+app.use('/api/admin', require('./routes/adminRoutes'));
+app.use('/api/notifications', require('./routes/notificationRoutes'));
+
 
 // Health check for Render
 app.get('/', (req, res) => res.send('API Running'));
