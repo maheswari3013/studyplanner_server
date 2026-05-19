@@ -40,16 +40,16 @@ router.get('/', auth, async (req, res) => {
   }
 });
 
-// GET /api/schedule/today - FIX 1: Show ALL statuses, use IST date
+// GET /api/schedule/today - FIX: Show ALL blocks including breaks
 router.get('/today', auth, async (req, res) => {
   try {
     const userId = req.user._id;
-    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }); // "2026-05-20"
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 
     const blocks = await StudyBlock.find({
       userId,
       date: today
-      // REMOVED: completed/missed filter so agenda doesn't disappear
+      // REMOVED isBreak filter
     }).sort({ time: 1 });
 
     res.json(blocks);
@@ -58,7 +58,6 @@ router.get('/today', auth, async (req, res) => {
     res.status(500).json({ msg: 'Server error' });
   }
 });
-
 // GET /api/schedule/stats
 router.get('/stats', auth, async (req, res) => {
   try {
