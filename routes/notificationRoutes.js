@@ -70,7 +70,7 @@ cron.schedule('* * * * *', async () => {
       const payload = JSON.stringify({
         title: `Time to study: ${block.subject}`,
         body: `It's ${currentTime} - start your ${block.topic} session. ${block.duration} min`,
-        icon: '/icon-192x192.png',
+        icon: '/icon-192.png',
         data: { url: '/dashboard' }
       });
 
@@ -105,7 +105,7 @@ router.post('/send', auth, async (req, res) => {
     const payload = JSON.stringify({
       title: req.body.title || 'Test Notification',
       body: req.body.body || 'It works!',
-      icon: '/icon-192x192.png',
+      icon: '/icon-192.png',
       data: { url: '/dashboard' }
     });
 
@@ -119,9 +119,6 @@ router.post('/send', auth, async (req, res) => {
     res.status(500).json({ msg: 'Server error' });
   }
 });
-// GET /api/notifications/vapid-public-key
-router.get('/vapid-public-key', auth, (req, res) => {
-  res.json({ publicKey: process.env.VAPID_PUBLIC_KEY });
-});
+
 
 module.exports = router;

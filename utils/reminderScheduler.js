@@ -34,7 +34,7 @@ cron.schedule('* * * * *', async () => {
       const payload = JSON.stringify({
         title: `Time to ${block.type}: ${block.subject}`,
         body: `Start your ${block.topic} at ${block.time} - ${block.duration} min session`,
-        icon: '/icon-192x192.png',
+        icon: '/icon-192.png',
         data: { url: '/agenda' }
       });
 
