@@ -313,25 +313,39 @@ router.get('/google/auth', auth, (req, res) => {
     access_type: 'offline',
     prompt: 'consent',
     scope: ['https://www.googleapis.com/auth/calendar.events'],
-    state: req.user._id
+    state: req.user._id.toString()
   });
   res.json({ url });
 });
 
-// GET /api/schedule/google/callback - Handle Google redirect
+// GET /api/schedule/google/callback - Handle Google redirect 
 router.get('/google/callback', async (req, res) => {
+  console.log('Google callback hit. Query:', req.query); // ADD THIS LINE
+  
   try {
     const { code, state } = req.query;
+    if (!code) return res.status(400).send('Missing code');
+    if (!state) return res.status(400).send('Missing state');
+    
     const userId = state;
     const oauth2Client = getOAuth2Client();
 
+    console.log('Getting tokens for userId:', userId); // ADD THIS
     const { tokens } = await oauth2Client.getToken(code);
+    
+    console.log('Tokens received, updating user'); // ADD THIS
     await User.findByIdAndUpdate(userId, { googleTokens: tokens });
 
-    res.send('<script>window.close();</script><h2>Connected! Close this window and click Sync again.</h2>');
+    res.send(`
+      <script>
+        window.opener.postMessage({type:"GOOGLE_AUTH_SUCCESS"}, "*");
+        window.close();
+      </script>
+      <h2>Connected! You can close this window.</h2>
+    `);
   } catch (err) {
-    console.error('Google auth error:', err);
-    res.status(500).send('Auth failed');
+    console.error('Google auth error:', err); // Full error object
+    res.status(500).send(`Auth failed: ${err.message}`);
   }
 });
 

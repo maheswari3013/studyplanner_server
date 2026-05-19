@@ -27,6 +27,13 @@ const corsOptions = {
   credentials: true,
   optionsSuccessStatus: 200
 };
+app.use((req, res, next) => {
+  res.status(404).json({ 
+    success: false, 
+    message: 'Route not found',
+    path: req.originalUrl 
+  });
+});
 
 app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
