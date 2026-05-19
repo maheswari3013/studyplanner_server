@@ -19,7 +19,7 @@ const normalizeTopics = (exam) => {
 
   if (exam.totalHours > 0) {
     const topicNames = exam.syllabusTopics?.length > 0
-     ? exam.syllabusTopics.filter(t => typeof t === 'string' && t.trim())
+    ? exam.syllabusTopics.filter(t => typeof t === 'string' && t.trim())
       : ['General'];
 
     const hoursPerTopic = exam.totalHours / topicNames.length;
@@ -76,7 +76,7 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
           used: 0,
           breakRatio: exam.breakRatio,
           subject: exam.subject,
-          color: exam.color || '#3B82F6' // ← ADD COLOR
+          color: exam.color || '#3B82F6'
         };
         dayData.totalAvailable += examHours;
       }
@@ -128,7 +128,7 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
         examId,
         examName: exam.subject,
         examDate: exam.examDate,
-        color: exam.color || '#3B82F6', // ← ADD COLOR
+        color: exam.color || '#3B82F6',
         topicName: topic.name,
         baseHoursPerTopic: topic.hours,
         adjustedHoursPerTopic,
@@ -173,8 +173,8 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
   });
 
   const sortedTopics = topics
-   .filter(t => t.hoursRemaining > 0)
-   .sort((a, b) => {
+  .filter(t => t.hoursRemaining > 0)
+  .sort((a, b) => {
       if (a.userPriority!== b.userPriority) return a.userPriority - b.userPriority;
       if (a.daysUntilExam!== b.daysUntilExam) return a.daysUntilExam - b.daysUntilExam;
       return b.hoursRemaining - a.hoursRemaining;
@@ -212,19 +212,18 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
         const startMin = Math.round(currentMinutes % 60);
         const startTime = `${String(startHour).padStart(2, '0')}:${String(startMin).padStart(2, '0')}`;
 
-        const studyStartDateTime = new Date(day.date);
-        studyStartDateTime.setUTCHours(startHour, startMin, 0, 0);
+        const dateStr = day.date.toISOString().split('T')[0]; // FIXED: String date
 
         day.sessions.push({
           type: 'Study',
           examId: topic.examId,
           examName: topic.examName,
-          color: topic.color, // ← ADD COLOR
+          color: topic.color,
           topicName: topic.topicName,
           hours: actualStudyHours,
           priority: topic.userPriority,
-          date: studyStartDateTime,
-          startTime,
+          date: dateStr, // FIXED: String not Date
+          startTime, // IST "09:50" - will be converted to UTC in routes
           duration: actualStudyMinutes,
           isBreak: false,
           isGenerated: true
@@ -243,18 +242,15 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
           const breakStartMin = Math.round(currentMinutes % 60);
           const breakStartTime = `${String(breakStartHour).padStart(2, '0')}:${String(breakStartMin).padStart(2, '0')}`;
 
-          const breakStartDateTime = new Date(day.date);
-          breakStartDateTime.setUTCHours(breakStartHour, breakStartMin, 0, 0);
-
           day.sessions.push({
             type: 'Break',
             examId: topic.examId,
             examName: topic.examName,
-            color: topic.color, // ← ADD COLOR
+            color: topic.color,
             topicName: 'Break',
             hours: breakHours,
-            date: breakStartDateTime,
-            startTime: breakStartTime,
+            date: dateStr, // FIXED: String not Date
+            startTime: breakStartTime, // IST
             duration: breakMinutes,
             isBreak: true,
             isGenerated: true
@@ -279,7 +275,7 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
     }
   }
 
-  // SPACED REPETITION - BUG FIX #1 & #2
+  // SPACED REPETITION
   availableDays.forEach(day => {
     day.sessions.filter(s => s.type === 'Study').forEach(session => {
       const examCap = day.examCaps[session.examId];
@@ -299,7 +295,6 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
           return eId === session.examId;
         });
 
-        // BUG FIX #1: Don't schedule review on/after exam day
         const dayBeforeExam = new Date(matchingExam.examDate);
         dayBeforeExam.setDate(dayBeforeExam.getDate() - 1);
         dayBeforeExam.setHours(23, 59, 59, 999);
@@ -311,31 +306,27 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
           const reviewHours = 0.5;
           const reviewMinutes = reviewHours * 60;
 
-          // BUG FIX #2: Check both exam cap AND day end time
           if (reviewExamCap.available - reviewExamCap.used >= reviewHours) {
             let currentMinutes = config.startHour * 60 + reviewDay.usedHours * 60;
-            if (currentMinutes + reviewMinutes > config.endHour * 60) return; // Past day end
+            if (currentMinutes + reviewMinutes > config.endHour * 60) return;
 
             const remainingDayHours = (config.endHour * 60 - currentMinutes) / 60;
-            if (remainingDayHours < reviewHours) return; // Not enough room in day
+            if (remainingDayHours < reviewHours) return;
 
             const startHour = Math.floor(currentMinutes / 60);
             const startMin = Math.round(currentMinutes % 60);
             const startTime = `${String(startHour).padStart(2, '0')}:${String(startMin).padStart(2, '0')}`;
 
-            const reviewStartDateTime = new Date(reviewDay.date);
-            reviewStartDateTime.setUTCHours(startHour, startMin, 0, 0);
-
             reviewDay.sessions.push({
               type: 'Review',
               examId: session.examId,
               examName: session.examName,
-              color: session.color, // ← ADD COLOR
+              color: session.color,
               topicName: session.topicName,
               hours: reviewHours,
               intervalDay: interval,
-              date: reviewStartDateTime,
-              startTime,
+              date: reviewDateStr, // FIXED: String not Date
+              startTime, // IST
               duration: reviewMinutes,
               isBreak: false,
               isGenerated: true

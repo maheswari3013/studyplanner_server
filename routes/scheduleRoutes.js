@@ -37,7 +37,7 @@ const getOAuth2Client = () => new google.auth.OAuth2(
 // GET /api/schedule - Get all blocks for calendar
 router.get('/', auth, async (req, res) => {
   try {
-    const blocks = await StudyBlock.find({ userId: req.user._id }).sort({ date: 1, startTime: 1 });
+    const blocks = await StudyBlock.find({ userId: req.user._id }).sort({ date: 1, time: 1 });
     res.json(blocks);
   } catch (err) {
     console.error('Schedule fetch error:', err.message);
@@ -45,19 +45,17 @@ router.get('/', auth, async (req, res) => {
   }
 });
 
-// GET /api/schedule/today
+// GET /api/schedule/today - FIXED FOR IST
 router.get('/today', auth, async (req, res) => {
   try {
     const userId = req.user._id;
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date();
-    endOfDay.setHours(23, 59, 59, 999);
+    // FIXED: Use IST date, not UTC
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }); // "2026-05-20"
 
     const blocks = await StudyBlock.find({
       userId,
-      date: { $gte: startOfDay, $lte: endOfDay }
-    }).sort({ startTime: 1 });
+      date: today
+    }).sort({ time: 1 });
 
     res.json(blocks);
   } catch (err) {
@@ -125,11 +123,11 @@ router.get('/exams', auth, async (req, res) => {
 
       const totalHours = blocks.reduce((sum, b) => sum + b.duration / 60, 0);
       const completedHours = blocks
-       .filter(b => b.completed)
-       .reduce((sum, b) => sum + b.duration / 60, 0);
+     .filter(b => b.completed)
+     .reduce((sum, b) => sum + b.duration / 60, 0);
 
       return {
-       ...exam.toObject(),
+     ...exam.toObject(),
         totalScheduledHours: Number(totalHours.toFixed(1)),
         completedHours: Number(completedHours.toFixed(1))
       };
@@ -183,7 +181,7 @@ router.post('/generate', auth, async (req, res) => {
         topic: s.topicName,
         date: s.date,
         time: s.startTime, // IST for UI: "09:50"
-        startTime: istToUtc(s.startTime), // UTC for cron: "04:20" 
+        startTime: istToUtc(s.startTime), // UTC for cron: "04:20"
         duration: s.duration,
         isGenerated: true,
         isBreak: s.isBreak || false,
@@ -212,28 +210,26 @@ router.post('/generate', auth, async (req, res) => {
   }
 });
 
-// GET /api/schedule/export/pdf - Using PDFKit
+// GET /api/schedule/export/pdf - Using PDFKit - FIXED FOR IST
 router.get('/export/pdf', auth, pdfLimiter, async (req, res) => {
   try {
     const userId = req.user._id;
     const { start, end } = req.query;
 
-    const startDate = start? new Date(start) : new Date();
-    startDate.setHours(0, 0, 0, 0);
-    const endDate = end? new Date(end) : new Date(startDate);
-    endDate.setDate(endDate.getDate() + 7);
-    endDate.setHours(23, 59, 59, 999);
+    // FIXED: Use IST dates for defaults
+    const startDate = start || new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const endDate = end || new Date(Date.now() + 7*86400000).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 
     const blocks = await StudyBlock.find({
       userId,
-      date: { $gte: startDate, $lt: endDate },
+      date: { $gte: startDate, $lte: endDate },
       isBreak: false,
       missed: false
-    }).sort({ date: 1, startTime: 1 });
+    }).sort({ date: 1, time: 1 });
 
     if (blocks.length === 0) {
       return res.status(400).json({
-        msg: `No study blocks found between ${startDate.toLocaleDateString()} and ${endDate.toLocaleDateString()}. Generate a schedule first.`
+        msg: `No study blocks found between ${startDate} and ${endDate}. Generate a schedule first.`
       });
     }
 
@@ -244,13 +240,13 @@ router.get('/export/pdf', auth, pdfLimiter, async (req, res) => {
     });
 
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename=study-schedule-${startDate.toISOString().split('T')[0]}.pdf`);
+    res.setHeader('Content-Disposition', `attachment; filename=study-schedule-${startDate}.pdf`);
 
     doc.pipe(res);
 
     doc.fontSize(20).font('Helvetica-Bold').text('Study Schedule', { align: 'center' });
     doc.fontSize(12).font('Helvetica').text(
-      `${startDate.toLocaleDateString('en-GB')} to ${new Date(endDate.getTime() - 86400000).toLocaleDateString('en-GB')}`,
+      `${startDate} to ${endDate}`,
       { align: 'center' }
     );
     doc.moveDown(1.5);
@@ -259,8 +255,8 @@ router.get('/export/pdf', auth, pdfLimiter, async (req, res) => {
     const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
     blocks.forEach(b => {
-      const d = new Date(b.date);
-      const dayKey = d.toISOString().split('T')[0];
+      const d = new Date(b.date + 'T00:00:00'); // Parse string date
+      const dayKey = b.date;
       if (!daysMap[dayKey]) {
         daysMap[dayKey] = {
           date: d,
@@ -285,12 +281,12 @@ router.get('/export/pdf', auth, pdfLimiter, async (req, res) => {
       day.blocks.forEach(block => {
         const color = block.color || '#3B82F6';
         doc.fontSize(10).font('Helvetica-Bold')
-          .fillColor(color)
-          .text(`${block.startTime} - ${block.subject}`, { continued: false });
+        .fillColor(color)
+        .text(`${block.time} - ${block.subject}`, { continued: false });
 
         doc.fontSize(9).font('Helvetica')
-          .fillColor('#000000')
-          .text(` ${block.topic} • ${block.duration} min • ${block.type}`, {
+        .fillColor('#000000')
+        .text(` ${block.topic} • ${block.duration} min • ${block.type}`, {
              indent: 10
            });
         doc.moveDown(0.3);
@@ -389,18 +385,15 @@ router.post('/google/sync', auth, syncLimiter, async (req, res) => {
     let synced = 0, errors = 0;
 
     for (const block of blocks) {
-      const start = new Date(block.date);
-      const [h, m] = block.startTime.split(':');
-      start.setHours(parseInt(h), parseInt(m), 0, 0);
-
+      const start = new Date(`${block.date}T${block.time}:00`); // Use IST time for Google Calendar
       const end = new Date(start);
       end.setMinutes(end.getMinutes() + block.duration);
 
       const eventData = {
         summary: `${block.subject} - ${block.topic}`,
         description: `StudySync: ${block.type}\nPriority: ${block.priority}\nDuration: ${block.duration}min`,
-        start: { dateTime: start },
-        end: { dateTime: end },
+        start: { dateTime: start, timeZone: 'Asia/Kolkata' },
+        end: { dateTime: end, timeZone: 'Asia/Kolkata' },
         colorId: block.priority === 1? '11' : block.type === 'Review'? '5' : '7',
         extendedProperties: { private: { studySyncId: block._id.toString() } }
       };
@@ -465,7 +458,7 @@ router.get('/export', auth, async (req, res) => {
     const blocks = await StudyBlock.find({
       userId: req.user._id,
       isBreak: false
-    }).sort({ date: 1, startTime: 1 });
+    }).sort({ date: 1, time: 1 });
     res.json(blocks);
   } catch (err) {
     console.error('Export error:', err);
@@ -610,7 +603,7 @@ router.patch('/:id/complete', auth, async (req, res) => {
   }
 });
 
-// PATCH /api/schedule/:id/missed - TRUE Dynamic Rescheduling
+// PATCH /api/schedule/:id/missed - TRUE Dynamic Rescheduling - FIXED FOR STRING DATES
 router.patch('/:id/missed', auth, async (req, res) => {
   try {
     const userId = req.user._id;
@@ -641,10 +634,11 @@ router.patch('/:id/missed', auth, async (req, res) => {
       });
     }
 
+    const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
     const futureBlocks = await StudyBlock.find({
       userId,
       subject: missedBlock.subject,
-      date: { $gte: new Date() },
+      date: { $gte: todayStr },
       isGenerated: true,
       completed: false,
       missed: false,
@@ -662,7 +656,7 @@ router.patch('/:id/missed', auth, async (req, res) => {
     await StudyBlock.deleteMany({
       userId,
       subject: missedBlock.subject,
-      date: { $gte: new Date() },
+      date: { $gte: todayStr },
       isGenerated: true,
       completed: false
     });
@@ -702,13 +696,27 @@ router.patch('/:id/missed', auth, async (req, res) => {
       });
     }
 
+    // Helper: Convert IST "HH:MM" to UTC "HH:MM"
+    const istToUtc = (timeStr) => {
+      const [h, m] = timeStr.split(':').map(Number);
+      let utcH = h - 5;
+      let utcM = m - 30;
+      if (utcM < 0) {
+        utcM += 60;
+        utcH -= 1;
+      }
+      if (utcH < 0) utcH += 24;
+      return `${String(utcH).padStart(2,'0')}:${String(utcM).padStart(2,'0')}`;
+    };
+
     const newBlocks = result.schedule.flatMap(d => d.sessions.map(s => ({
       userId,
       examId: s.examId,
       subject: s.examName,
       topic: s.topicName,
       date: s.date,
-      startTime: s.startTime,
+      time: s.startTime, // IST for UI
+      startTime: istToUtc(s.startTime), // UTC for cron
       duration: s.duration,
       isGenerated: true,
       isBreak: s.isBreak || false,
