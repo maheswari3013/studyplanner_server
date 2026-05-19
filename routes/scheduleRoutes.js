@@ -10,9 +10,9 @@ const { generateSchedule } = require('../utils/scheduler');
 const rateLimit = require('express-rate-limit');
 const PDFDocument = require('pdfkit');
 
-// Rate limiters - define once at top
+// Rate limiters
 const pdfLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
+  windowMs: 60 * 1000,
   max: 5,
   message: { msg: 'Too many PDF exports. Try again in 1 minute.' },
   standardHeaders: true,
@@ -20,7 +20,7 @@ const pdfLimiter = rateLimit({
 });
 
 const syncLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
+  windowMs: 60 * 1000,
   max: 3,
   message: { msg: 'Too many syncs. Try again in 1 minute.' },
   standardHeaders: true,
@@ -115,32 +115,32 @@ router.get('/exams', auth, async (req, res) => {
   try {
     const userId = req.user._id;
     const exams = await Exam.find({ userId });
-    
-    // Recalculate totalScheduledHours from actual StudyBlocks
+
     const examsWithStats = await Promise.all(exams.map(async (exam) => {
-      const blocks = await StudyBlock.find({ 
-        userId, 
-        subject: exam.subject, 
-        isBreak: false 
+      const blocks = await StudyBlock.find({
+        userId,
+        subject: exam.subject,
+        isBreak: false
       });
-      
+
       const totalHours = blocks.reduce((sum, b) => sum + b.duration / 60, 0);
       const completedHours = blocks
-        .filter(b => b.completed)
-        .reduce((sum, b) => sum + b.duration / 60, 0);
-        
+       .filter(b => b.completed)
+       .reduce((sum, b) => sum + b.duration / 60, 0);
+
       return {
-        ...exam.toObject(),
+       ...exam.toObject(),
         totalScheduledHours: Number(totalHours.toFixed(1)),
         completedHours: Number(completedHours.toFixed(1))
       };
     }));
-    
+
     res.json(examsWithStats);
   } catch (err) {
     res.status(500).json({ msg: 'Server Error' });
   }
 });
+
 // POST /api/schedule/generate - Generate study plan
 router.post('/generate', auth, async (req, res) => {
   try {
@@ -176,7 +176,7 @@ router.post('/generate', auth, async (req, res) => {
         type: s.type || 'Study',
         intervalDay: s.intervalDay,
         priority: s.priority,
-        color: s.color // ← SAVE COLOR
+        color: s.color
       }))
     );
 
@@ -196,9 +196,7 @@ router.post('/generate', auth, async (req, res) => {
   }
 });
 
-
-
-// GET /api/schedule/export/pdf - Using PDFKit, works on Render
+// GET /api/schedule/export/pdf - Using PDFKit
 router.get('/export/pdf', auth, pdfLimiter, async (req, res) => {
   try {
     const userId = req.user._id;
@@ -218,37 +216,32 @@ router.get('/export/pdf', auth, pdfLimiter, async (req, res) => {
     }).sort({ date: 1, startTime: 1 });
 
     if (blocks.length === 0) {
-      return res.status(400).json({ 
-        msg: `No study blocks found between ${startDate.toLocaleDateString()} and ${endDate.toLocaleDateString()}. Generate a schedule first.` 
+      return res.status(400).json({
+        msg: `No study blocks found between ${startDate.toLocaleDateString()} and ${endDate.toLocaleDateString()}. Generate a schedule first.`
       });
     }
 
-    // Create PDF
-    const doc = new PDFDocument({ 
-      size: 'A4', 
+    const doc = new PDFDocument({
+      size: 'A4',
       layout: 'landscape',
-      margin: 30 
+      margin: 30
     });
 
-    // Set response headers
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename=study-schedule-${startDate.toISOString().split('T')[0]}.pdf`);
-    
-    // Pipe PDF to response
+
     doc.pipe(res);
 
-    // Title
     doc.fontSize(20).font('Helvetica-Bold').text('Study Schedule', { align: 'center' });
     doc.fontSize(12).font('Helvetica').text(
-      `${startDate.toLocaleDateString('en-GB')} to ${new Date(endDate.getTime() - 86400000).toLocaleDateString('en-GB')}`, 
+      `${startDate.toLocaleDateString('en-GB')} to ${new Date(endDate.getTime() - 86400000).toLocaleDateString('en-GB')}`,
       { align: 'center' }
     );
     doc.moveDown(1.5);
 
-    // Group blocks by day
     const daysMap = {};
     const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    
+
     blocks.forEach(b => {
       const d = new Date(b.date);
       const dayKey = d.toISOString().split('T')[0];
@@ -262,13 +255,11 @@ router.get('/export/pdf', auth, pdfLimiter, async (req, res) => {
       daysMap[dayKey].blocks.push(b);
     });
 
-    // Sort days
     const sortedDays = Object.values(daysMap).sort((a, b) => a.date - b.date);
 
-    // Draw each day
     sortedDays.forEach((day, idx) => {
       if (idx > 0) doc.moveDown(1);
-      
+
       doc.fontSize(14).font('Helvetica-Bold').text(
         `${day.dayName}, ${day.date.toLocaleDateString('en-GB')}`,
         { underline: true }
@@ -278,19 +269,18 @@ router.get('/export/pdf', auth, pdfLimiter, async (req, res) => {
       day.blocks.forEach(block => {
         const color = block.color || '#3B82F6';
         doc.fontSize(10).font('Helvetica-Bold')
-           .fillColor(color)
-           .text(`${block.startTime} - ${block.subject}`, { continued: false });
-        
+          .fillColor(color)
+          .text(`${block.startTime} - ${block.subject}`, { continued: false });
+
         doc.fontSize(9).font('Helvetica')
-           .fillColor('#000000')
-           .text(`  ${block.topic} • ${block.duration} min • ${block.type}`, { 
-             indent: 10 
+          .fillColor('#000000')
+          .text(` ${block.topic} • ${block.duration} min • ${block.type}`, {
+             indent: 10
            });
         doc.moveDown(0.3);
       });
     });
 
-    // Legend
     doc.moveDown(1);
     doc.fontSize(10).font('Helvetica-Bold').text('Subjects:', { underline: true });
     const uniqueSubjects = [...new Set(blocks.map(b => b.subject))];
@@ -306,6 +296,7 @@ router.get('/export/pdf', auth, pdfLimiter, async (req, res) => {
     res.status(500).json({ msg: 'Failed to generate PDF', error: err.message });
   }
 });
+
 // GET /api/schedule/google/auth - Start OAuth flow
 router.get('/google/auth', auth, (req, res) => {
   const oauth2Client = getOAuth2Client();
@@ -318,22 +309,23 @@ router.get('/google/auth', auth, (req, res) => {
   res.json({ url });
 });
 
-// GET /api/schedule/google/callback - Handle Google redirect 
+// GET /api/schedule/google/callback - Handle Google redirect
 router.get('/google/callback', async (req, res) => {
-  console.log('Google callback hit. Query:', req.query); // ADD THIS LINE
-  
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+  console.log('Google callback hit. Query:', req.query);
+
   try {
     const { code, state } = req.query;
     if (!code) return res.status(400).send('Missing code');
     if (!state) return res.status(400).send('Missing state');
-    
+
     const userId = state;
     const oauth2Client = getOAuth2Client();
 
-    console.log('Getting tokens for userId:', userId); // ADD THIS
+    console.log('Getting tokens for userId:', userId);
     const { tokens } = await oauth2Client.getToken(code);
-    
-    console.log('Tokens received, updating user'); // ADD THIS
+
+    console.log('Tokens received, updating user');
     await User.findByIdAndUpdate(userId, { googleTokens: tokens });
 
     res.send(`
@@ -344,54 +336,95 @@ router.get('/google/callback', async (req, res) => {
       <h2>Connected! You can close this window.</h2>
     `);
   } catch (err) {
-    console.error('Google auth error:', err); // Full error object
-    res.status(500).send(`Auth failed: ${err.message}`);
+    console.error('Google auth error:', err.response?.data || err.message);
+    res.status(500).send(`
+      <h2>Auth failed</h2>
+      <p>${err.response?.data?.error || err.message}</p>
+      <p>Close this window and try again.</p>
+      <script>setTimeout(() => window.close(), 3000);</script>
+    `);
   }
 });
 
-for (const block of blocks) {
-  const start = new Date(block.date);
-  const [h, m] = block.startTime.split(':');
-  start.setHours(parseInt(h), parseInt(m), 0, 0);
-
-  const end = new Date(start);
-  end.setMinutes(end.getMinutes() + block.duration);
-
-  const eventData = {
-    summary: `${block.subject} - ${block.topic}`,
-    description: `StudySync: ${block.type}\nPriority: ${block.priority}\nDuration: ${block.duration}min`,
-    start: { dateTime: start }, // Date object, no toISOString()
-    end: { dateTime: end }, // Date object, no toISOString()
-    colorId: block.priority === 1? '11' : block.type === 'Review'? '5' : '7',
-    extendedProperties: { private: { studySyncId: block._id.toString() } }
-  };
-
+// POST /api/schedule/google/sync - Push blocks to calendar
+router.post('/google/sync', auth, syncLimiter, async (req, res) => {
   try {
-    // Check for existing event to prevent duplicates
-    const existing = await calendar.events.list({
-      calendarId: 'primary',
-      privateExtendedProperty: `studySyncId=${block._id.toString()}`,
-      maxResults: 1
+    const user = await User.findById(req.user._id);
+    if (!user.googleTokens?.refresh_token) {
+      return res.status(400).json({ msg: 'Connect Google Calendar first', needsAuth: true });
+    }
+
+    const oauth2Client = getOAuth2Client();
+    oauth2Client.setCredentials(user.googleTokens);
+
+    const { credentials } = await oauth2Client.refreshAccessToken();
+    await User.findByIdAndUpdate(req.user._id, { googleTokens: credentials });
+    oauth2Client.setCredentials(credentials);
+
+    const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+
+    const blocks = await StudyBlock.find({
+      userId: req.user._id,
+      isBreak: false,
+      missed: false,
+      completed: false
     });
 
-    if (existing.data.items.length > 0) {
-      await calendar.events.update({
-        calendarId: 'primary',
-        eventId: existing.data.items[0].id,
-        requestBody: eventData
-      });
-    } else {
-      await calendar.events.insert({
-        calendarId: 'primary',
-        requestBody: eventData
-      });
+    let synced = 0, errors = 0;
+
+    for (const block of blocks) {
+      const start = new Date(block.date);
+      const [h, m] = block.startTime.split(':');
+      start.setHours(parseInt(h), parseInt(m), 0, 0);
+
+      const end = new Date(start);
+      end.setMinutes(end.getMinutes() + block.duration);
+
+      const eventData = {
+        summary: `${block.subject} - ${block.topic}`,
+        description: `StudySync: ${block.type}\nPriority: ${block.priority}\nDuration: ${block.duration}min`,
+        start: { dateTime: start },
+        end: { dateTime: end },
+        colorId: block.priority === 1? '11' : block.type === 'Review'? '5' : '7',
+        extendedProperties: { private: { studySyncId: block._id.toString() } }
+      };
+
+      try {
+        const existing = await calendar.events.list({
+          calendarId: 'primary',
+          privateExtendedProperty: `studySyncId=${block._id.toString()}`,
+          maxResults: 1
+        });
+
+        if (existing.data.items.length > 0) {
+          await calendar.events.update({
+            calendarId: 'primary',
+            eventId: existing.data.items[0].id,
+            requestBody: eventData
+          });
+        } else {
+          await calendar.events.insert({
+            calendarId: 'primary',
+            requestBody: eventData
+          });
+        }
+        synced++;
+      } catch (e) {
+        errors++;
+        console.error('Event error:', e.message);
+      }
     }
-    synced++;
-  } catch (e) {
-    errors++;
-    console.error('Event error:', e.message);
+
+    res.json({
+      success: true,
+      msg: `Synced ${synced} events${errors > 0? `, ${errors} failed` : ''}`
+    });
+  } catch (err) {
+    console.error('Google sync error:', err);
+    res.status(500).json({ msg: 'Sync failed', error: err.message });
   }
-}
+});
+
 // DELETE /api/schedule/google/disconnect - Revoke access
 router.delete('/google/disconnect', auth, async (req, res) => {
   await User.findByIdAndUpdate(req.user._id, { $unset: { googleTokens: 1 } });
@@ -666,7 +699,7 @@ router.patch('/:id/missed', auth, async (req, res) => {
       type: s.type || 'Study',
       intervalDay: s.intervalDay,
       priority: s.priority,
-      color: s.color, // ← SAVE COLOR
+      color: s.color,
       rescheduledFrom: missedBlock._id
     })));
 
@@ -695,13 +728,11 @@ router.patch('/:id', auth, async (req, res) => {
       return res.status(400).json({ msg: 'Invalid block ID' });
     }
 
-    // Coerce numeric fields and sanitize input
-    const updateData = { ...req.body };
-    if (updateData.duration !== undefined) updateData.duration = parseInt(updateData.duration);
-    if (updateData.priority !== undefined) updateData.priority = parseInt(updateData.priority);
-    if (updateData.actualDuration !== undefined) updateData.actualDuration = parseInt(updateData.actualDuration);
-    
-    // Prevent updating protected fields
+    const updateData = {...req.body };
+    if (updateData.duration!== undefined) updateData.duration = parseInt(updateData.duration);
+    if (updateData.priority!== undefined) updateData.priority = parseInt(updateData.priority);
+    if (updateData.actualDuration!== undefined) updateData.actualDuration = parseInt(updateData.actualDuration);
+
     delete updateData._id;
     delete updateData.userId;
     delete updateData.isGenerated;
@@ -712,7 +743,7 @@ router.patch('/:id', auth, async (req, res) => {
       { $set: updateData },
       { new: true, runValidators: true }
     );
-    
+
     if (!block) return res.status(404).json({ msg: 'Block not found' });
     res.json(block);
   } catch (err) {
