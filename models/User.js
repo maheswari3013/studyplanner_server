@@ -26,8 +26,15 @@ const UserSchema = new mongoose.Schema({
   subjectConfidence: { type: Map, of: Number, default: {} },
   showAffirmations: { type: Boolean, default: true },
   isAdmin: { type: Boolean, default: false }, // ← Changed from role
-  pushSubscription: { type: Object },
-  lastActive: { type: Date, default: Date.now }
+  subscriptions: [{
+  endpoint: String,
+  expirationTime: Number,
+  keys: {
+    p256dh: String,
+    auth: String
+  }
+}],
+  lastActive: { type: Date, default: Date.now },
 });
 
 module.exports = mongoose.models.User || mongoose.model('User', UserSchema);

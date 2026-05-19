@@ -6,7 +6,7 @@ const User = require('../models/User');
 const StudyBlock = require('../models/StudyBlock');
 
 webpush.setVapidDetails(
-  'mailto:admin@studysync.com',
+  'mailto:dmaheswari3018@gmail.com', // Must match Render VAPID_MAILTO
   process.env.VAPID_PUBLIC_KEY,
   process.env.VAPID_PRIVATE_KEY
 );
@@ -14,11 +14,13 @@ webpush.setVapidDetails(
 // POST /api/notifications/subscribe
 router.post('/subscribe', auth, async (req, res) => {
   try {
+    // Use $addToSet to support multiple devices
     await User.findByIdAndUpdate(req.user._id, {
-      pushSubscription: req.body
+      $addToSet: { subscriptions: req.body }
     });
     res.json({ msg: 'Subscribed to push notifications' });
   } catch (err) {
+    console.error(err);
     res.status(500).json({ msg: 'Server error' });
   }
 });
@@ -27,7 +29,7 @@ router.post('/subscribe', auth, async (req, res) => {
 router.delete('/unsubscribe', auth, async (req, res) => {
   try {
     await User.findByIdAndUpdate(req.user._id, {
-      $unset: { pushSubscription: 1 }
+      $pull: { subscriptions: { endpoint: req.body.endpoint } }
     });
     res.json({ msg: 'Unsubscribed' });
   } catch (err) {
@@ -35,41 +37,23 @@ router.delete('/unsubscribe', auth, async (req, res) => {
   }
 });
 
-// GET /api/notifications/vapid-public-key
-router.get('/vapid-public-key', (req, res) => {
-  res.json({ publicKey: process.env.VAPID_PUBLIC_KEY });
-});
+// POST /api/notifications/send - Manual test endpoint
+router.post('/send', auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id);
+    const payload = JSON.stringify({
+      title: req.body.title || 'Test Notification',
+      body: req.body.body || 'It works!'
+    });
 
-// Cron: 8am daily reminder
-cron.schedule('0 8 * * *', async () => {
-  console.log('Running daily study reminders...');
-  const users = await User.find({ pushSubscription: { $exists: true } });
-
-  for (const user of users) {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-
-    const blocks = await StudyBlock.find({
-      userId: user._id,
-      date: { $gte: today, $lt: tomorrow },
-      completed: false,
-      isBreak: false
-    }).sort({ startTime: 1 });
-
-    if (blocks.length > 0) {
-      const payload = JSON.stringify({
-        title: 'StudySync Reminder',
-        body: `You have ${blocks.length} study blocks today. First: ${blocks[0].subject} at ${blocks[0].startTime}`,
-        icon: '/icon-192.png',
-        data: { url: '/agenda' }
-      });
-
-      webpush.sendNotification(user.pushSubscription, payload).catch(err => {
-        console.error('Push error for user', user._id, err.message);
-      });
-    }
+    const promises = user.subscriptions.map(sub =>
+      webpush.sendNotification(sub, payload).catch(err => console.log(err))
+    );
+    
+    await Promise.all(promises);
+    res.json({ msg: 'Push sent' });
+  } catch (err) {
+    res.status(500).json({ msg: 'Server error' });
   }
 });
 
