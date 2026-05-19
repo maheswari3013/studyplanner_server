@@ -349,70 +349,49 @@ router.get('/google/callback', async (req, res) => {
   }
 });
 
-// POST /api/schedule/google/sync - Push blocks to calendar
-router.post('/google/sync', auth, syncLimiter, async (req, res) => {
+for (const block of blocks) {
+  const start = new Date(block.date);
+  const [h, m] = block.startTime.split(':');
+  start.setHours(parseInt(h), parseInt(m), 0, 0);
+
+  const end = new Date(start);
+  end.setMinutes(end.getMinutes() + block.duration);
+
+  const eventData = {
+    summary: `${block.subject} - ${block.topic}`,
+    description: `StudySync: ${block.type}\nPriority: ${block.priority}\nDuration: ${block.duration}min`,
+    start: { dateTime: start }, // Date object, no toISOString()
+    end: { dateTime: end }, // Date object, no toISOString()
+    colorId: block.priority === 1? '11' : block.type === 'Review'? '5' : '7',
+    extendedProperties: { private: { studySyncId: block._id.toString() } }
+  };
+
   try {
-    const user = await User.findById(req.user._id);
-    if (!user.googleTokens?.refresh_token) {
-      return res.status(400).json({ msg: 'Connect Google Calendar first', needsAuth: true });
-    }
-
-    const oauth2Client = getOAuth2Client();
-    oauth2Client.setCredentials(user.googleTokens);
-
-    const { credentials } = await oauth2Client.refreshAccessToken();
-    await User.findByIdAndUpdate(req.user._id, { googleTokens: credentials });
-    oauth2Client.setCredentials(credentials);
-
-    const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
-
-    const blocks = await StudyBlock.find({
-      userId: req.user._id,
-      isBreak: false,
-      missed: false,
-      completed: false
+    // Check for existing event to prevent duplicates
+    const existing = await calendar.events.list({
+      calendarId: 'primary',
+      privateExtendedProperty: `studySyncId=${block._id.toString()}`,
+      maxResults: 1
     });
 
-    let synced = 0, errors = 0;
-    const userTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-
-    for (const block of blocks) {
-      const start = new Date(block.date);
-      const [h, m] = block.startTime.split(':');
-      start.setHours(parseInt(h), parseInt(m));
-
-      const end = new Date(start);
-      end.setMinutes(end.getMinutes() + block.duration);
-
-      try {
-        await calendar.events.insert({
-          calendarId: 'primary',
-          requestBody: {
-            summary: `${block.subject} - ${block.topic}`,
-            description: `StudySync: ${block.type}\nPriority: ${block.priority}\nDuration: ${block.duration}min`,
-            start: { dateTime: start.toISOString(), timeZone: userTz },
-            end: { dateTime: end.toISOString(), timeZone: userTz },
-            colorId: block.priority === 1? '11' : block.type === 'Review'? '5' : '7',
-            extendedProperties: { private: { studySyncId: block._id.toString() } }
-          }
-        });
-        synced++;
-      } catch (e) {
-        errors++;
-        console.error('Event insert error:', e.message);
-      }
+    if (existing.data.items.length > 0) {
+      await calendar.events.update({
+        calendarId: 'primary',
+        eventId: existing.data.items[0].id,
+        requestBody: eventData
+      });
+    } else {
+      await calendar.events.insert({
+        calendarId: 'primary',
+        requestBody: eventData
+      });
     }
-
-    res.json({
-      success: true,
-      msg: `Synced ${synced} events${errors > 0? `, ${errors} failed` : ''}`
-    });
-  } catch (err) {
-    console.error('Google sync error:', err);
-    res.status(500).json({ msg: 'Sync failed', error: err.message });
+    synced++;
+  } catch (e) {
+    errors++;
+    console.error('Event error:', e.message);
   }
-});
-
+}
 // DELETE /api/schedule/google/disconnect - Revoke access
 router.delete('/google/disconnect', auth, async (req, res) => {
   await User.findByIdAndUpdate(req.user._id, { $unset: { googleTokens: 1 } });
