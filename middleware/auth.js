@@ -2,8 +2,8 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User'); // You need this import
 
 module.exports = async function(req, res, next) { // ← add async here
-  const token = req.header('x-auth-token');
-
+  const authHeader = req.header('Authorization');
+  const token = authHeader?.replace('Bearer ', '');
   if (!token) {
     return res.status(401).json({ msg: 'No token, authorization denied' });
   }
@@ -13,9 +13,10 @@ module.exports = async function(req, res, next) { // ← add async here
     req.user = { _id: decoded.id };
     
     // Move the await INSIDE the function
-    await User.findByIdAndUpdate(decoded.id, { lastActive: new Date() }); // ← fixed
+    await User.findByIdAndUpdate(decoded.id || decoded.user?.id, { lastActive: new Date() });
     next();
   } catch (err) {
+    console.error('JWT Error:', err.message);
     res.status(401).json({ msg: 'Token is not valid' });
   }
 };
