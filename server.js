@@ -11,7 +11,7 @@ const allowedOrigins = [
   'https://studyplanner-client.vercel.app'
 ];
 
-app.use(cors({
+const corsOptions={
   origin: function (origin, callback) {
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
@@ -20,10 +20,12 @@ app.use(cors({
     }
   },
   credentials: true
-}));
-app.options('*',cors());
+};
 
+app.options(cors(corsOptions));
+app.options(/.*/,cors(corsOptions));
 app.use(express.json());
+app.use(express.urlencoded({extended:false}));
 
 // Routes
 app.use('/api/auth', require('./routes/authRoutes'));
@@ -40,13 +42,8 @@ app.get('/', (req, res) => res.send('API Running'));
 app.use(errorHandler);
 
 // DB + Server start with error handling
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => {
-    console.log('MongoDB connected');
+
     const PORT = process.env.PORT || 5000;
     app.listen(PORT, () => console.log(`Server running on ${PORT}`));
-  })
-  .catch(err => {
-    console.error('MongoDB connection error:', err);
-    process.exit(1);
-  });
+  
+  
