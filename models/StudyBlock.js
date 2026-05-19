@@ -53,10 +53,13 @@ const StudyBlockSchema = new mongoose.Schema({
     default: false
   },
   priority: Number,
-  rescheduledFrom: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'StudyBlock'
-  },
+color: {
+  type: String,
+  default: '#3B82F6'
+},
+rescheduledFrom: {type: mongoose.Schema.Types.ObjectId,
+  ref: 'StudyBlock'
+},
   // NEW: Study Log History
   actualDuration: { type: Number, default: 0 }, // actual minutes logged
   loggedAt: Date

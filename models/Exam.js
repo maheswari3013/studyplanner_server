@@ -37,12 +37,15 @@ const ExamSchema = new mongoose.Schema({
     max: 5,
     default: 3
   },
-  priority: {
-    type: Number,
-    min: 1,
-    max: 5,
-    default: 3
-  },
+  priority: Number,
+color: {
+  type: String,
+  default: '#3B82F6'
+},
+rescheduledFrom: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: 'StudyBlock'
+},
   totalHours: {
     type: Number,
     required: false,

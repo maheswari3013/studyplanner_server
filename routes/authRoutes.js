@@ -87,29 +87,41 @@ router.get('/user', auth, async (req, res) => {
 
 // PATCH /api/auth/profile
 router.patch('/profile', auth, async (req, res) => {
-  const { name, email, theme } = req.body; // ADD theme
+  const { name, email, theme } = req.body;
+
   try {
-    const existing = await User.findOne({ email, _id: { $ne: req.user._id } }); // Changed: req.user.id -> req.user._id
-    if (existing) {
-      return res.status(400).json({ msg: 'Email already in use' });
+    // Build update object only with fields that were sent
+    const updateData = {};
+    if (name!== undefined) updateData.name = name;
+    if (email!== undefined) updateData.email = email;
+    if (theme!== undefined) updateData.theme = theme;
+
+    // Only check email uniqueness if email is being changed
+    if (email) {
+      const existing = await User.findOne({ email, _id: { $ne: req.user._id } });
+      if (existing) {
+        return res.status(400).json({ msg: 'Email already in use' });
+      }
     }
 
-    const updateData = { name, email };
-    if (theme) updateData.theme = theme; // ADD THIS for ThemeContext
-
     const user = await User.findByIdAndUpdate(
-      req.user._id, // Changed: req.user.id -> req.user._id
-      updateData,
+      req.user._id,
+      { $set: updateData },
       { new: true, runValidators: true }
     ).select('-password');
-    
+
+    if (!user) return res.status(404).json({ msg: 'User not found' });
+
     res.json(user);
   } catch (err) {
-    console.error('Update profile error:', err.message);
-    res.status(500).send('Server error');
+    console.error('Update profile error:', err);
+    // Send actual validation error instead of generic 500
+    if (err.name === 'ValidationError') {
+      return res.status(400).json({ msg: Object.values(err.errors)[0].message });
+    }
+    res.status(500).json({ msg: 'Server error' });
   }
 });
-
 // POST /api/auth/change-password
 router.post('/change-password', auth, async (req, res) => {
   const { currentPassword, newPassword } = req.body;
