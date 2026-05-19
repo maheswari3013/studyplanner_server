@@ -9,7 +9,7 @@ const StudyBlockSchema = new mongoose.Schema({
   examId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Exam',
-    required:false
+    required: false
   },
   subject: {
     type: String,
@@ -20,11 +20,16 @@ const StudyBlockSchema = new mongoose.Schema({
     required: true
   },
   date: {
-    type: Date,
+    type: String, // "2026-05-20" - STRING not Date
+    required: true
+  },
+  time: {
+    type: String, // "09:50" IST for UI display
     required: true
   },
   startTime: {
-    type: String // "14:30" format
+    type: String, // "04:20" UTC for cron - ONLY ONE startTime
+    required: true
   },
   duration: {
     type: Number, // planned minutes
@@ -53,19 +58,20 @@ const StudyBlockSchema = new mongoose.Schema({
     default: false
   },
   priority: Number,
-color: {
-  type: String,
-  default: '#3B82F6'
-},
-rescheduledFrom: {type: mongoose.Schema.Types.ObjectId,
-  ref: 'StudyBlock'
-},
-  // NEW: Study Log History
-  actualDuration: { type: Number, default: 0 }, // actual minutes logged
+  color: {
+    type: String,
+    default: '#3B82F6'
+  },
+  rescheduledFrom: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'StudyBlock'
+  },
+  actualDuration: { type: Number, default: 0 },
   loggedAt: Date
 }, { timestamps: true });
 
 StudyBlockSchema.index({ userId: 1, date: 1 });
 StudyBlockSchema.index({ userId: 1, subject: 1, date: 1 });
+StudyBlockSchema.index({ date: 1, startTime: 1 }); // Add this for cron performance
 
 module.exports = mongoose.model('StudyBlock', StudyBlockSchema);

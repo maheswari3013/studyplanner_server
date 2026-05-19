@@ -13,21 +13,17 @@ webpush.setVapidDetails(
 cron.schedule('* * * * *', async () => {
   try {
     const now = new Date();
-    const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-    
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    const todayEnd = new Date();
-    todayEnd.setHours(23, 59, 59, 999);
+    const utcTime = `${String(now.getUTCHours()).padStart(2, '0')}:${String(now.getUTCMinutes()).padStart(2, '0')}`;
+    const today = now.toISOString().split('T')[0]; // "2026-05-20"
 
     // Find StudyBlocks starting right now
     const blocks = await StudyBlock.find({
-      startTime: currentTime,
-      date: { $gte: todayStart, $lte: todayEnd },
+      startTime: utcTime,
+      date: today,
       completed: false,
       missed: false,
       isBreak: false,
-      type: { $in: ['Study', 'Review'] } // Don't notify for breaks
+      type: { $in: ['Study', 'Review'] }
     }).populate('userId');
 
     for (const block of blocks) {
@@ -36,15 +32,14 @@ cron.schedule('* * * * *', async () => {
 
       const payload = JSON.stringify({
         title: `Time to ${block.type}: ${block.subject}`,
-        body: `It's ${currentTime} - start your ${block.topic}. ${block.duration} min session`,
+        body: `Start your ${block.topic} - ${block.duration} min session`,
         icon: '/icon-192x192.png',
-        data: { url: '/dashboard' }
+        data: { url: '/agenda' }
       });
 
       const promises = user.subscriptions.map(sub =>
         webpush.sendNotification(sub, payload).catch(err => {
           if (err.statusCode === 410) {
-            // Subscription expired, remove it
             User.findByIdAndUpdate(user._id, {
               $pull: { subscriptions: { endpoint: sub.endpoint } }
             }).exec();
@@ -58,6 +53,20 @@ cron.schedule('* * * * *', async () => {
     }
   } catch (err) {
     console.error('Reminder cron error:', err);
+  }
+});
+
+// Mark yesterday's unfinished blocks as missed at 12:01am UTC
+cron.schedule('1 0 * * *', async () => {
+  try {
+    const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+    const result = await StudyBlock.updateMany(
+      { date: yesterday, completed: false, missed: false, isBreak: false },
+      { missed: true }
+    );
+    console.log(`Marked ${result.modifiedCount} blocks as missed from ${yesterday}`);
+  } catch (err) {
+    console.error('Cleanup cron error:', err);
   }
 });
 

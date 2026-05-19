@@ -163,20 +163,36 @@ router.post('/generate', auth, async (req, res) => {
       });
     }
 
+    // Helper: Convert IST "HH:MM" to UTC "HH:MM"
+    const istToUtc = (timeStr) => {
+      const [h, m] = timeStr.split(':').map(Number);
+      let utcH = h - 5; // IST = UTC+5:30
+      let utcM = m - 30;
+      if (utcM < 0) {
+        utcM += 60;
+        utcH -= 1;
+      }
+      if (utcH < 0) utcH += 24;
+      return `${String(utcH).padStart(2,'0')}:${String(utcM).padStart(2,'0')}`;
+    };
+
     const blocksToSave = result.schedule.flatMap(day =>
       day.sessions.map(s => ({
         userId,
         subject: s.examName,
         topic: s.topicName,
         date: s.date,
-        startTime: s.startTime,
+        time: s.startTime, // IST for UI: "09:50"
+        startTime: istToUtc(s.startTime), // UTC for cron: "04:20" 
         duration: s.duration,
         isGenerated: true,
         isBreak: s.isBreak || false,
         type: s.type || 'Study',
         intervalDay: s.intervalDay,
         priority: s.priority,
-        color: s.color
+        color: s.color,
+        completed: false,
+        missed: false
       }))
     );
 
