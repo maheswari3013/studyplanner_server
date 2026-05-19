@@ -27,13 +27,7 @@ const corsOptions = {
   credentials: true,
   optionsSuccessStatus: 200
 };
-app.use((req, res, next) => {
-  res.status(404).json({ 
-    success: false, 
-    message: 'Route not found',
-    path: req.originalUrl 
-  });
-});
+
 
 app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
@@ -48,6 +42,13 @@ app.use('/api/admin', require('./routes/adminRoutes'));
 app.use('/api/notifications', require('./routes/notificationRoutes'));
 
 app.get('/', (req, res) => res.send('API Running'));
+app.use((req, res, next) => {
+  res.status(404).json({ 
+    success: false, 
+    message: 'Route not found',
+    path: req.originalUrl 
+  });
+});
 app.use(errorHandler);
 
 const PORT = process.env.PORT || 5000;
