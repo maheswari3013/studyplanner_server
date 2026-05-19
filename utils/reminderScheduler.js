@@ -14,11 +14,11 @@ cron.schedule('* * * * *', async () => {
   try {
     const now = new Date();
     const utcTime = `${String(now.getUTCHours()).padStart(2, '0')}:${String(now.getUTCMinutes()).padStart(2, '0')}`;
-    const today = now.toISOString().split('T')[0]; // "2026-05-20"
+    const today = now.toISOString().split('T')[0]; // "2026-05-20" UTC date
 
-    // Find StudyBlocks starting right now
+    // FIX: Find blocks using UTC startTime
     const blocks = await StudyBlock.find({
-      startTime: utcTime,
+      startTime: utcTime, // This is UTC "04:20" 
       date: today,
       completed: false,
       missed: false,
@@ -30,9 +30,10 @@ cron.schedule('* * * * *', async () => {
       const user = block.userId;
       if (!user?.subscriptions?.length) continue;
 
+      // FIX: Use block.time for IST display in notification
       const payload = JSON.stringify({
         title: `Time to ${block.type}: ${block.subject}`,
-        body: `Start your ${block.topic} - ${block.duration} min session`,
+        body: `Start your ${block.topic} at ${block.time} - ${block.duration} min session`,
         icon: '/icon-192x192.png',
         data: { url: '/agenda' }
       });
@@ -49,7 +50,7 @@ cron.schedule('* * * * *', async () => {
       );
       
       await Promise.all(promises);
-      console.log(`Reminder sent: ${block.subject} - ${block.topic} to ${user.email}`);
+      console.log(`Reminder sent: ${block.subject} - ${block.topic} at ${block.time} IST`);
     }
   } catch (err) {
     console.error('Reminder cron error:', err);

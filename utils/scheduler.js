@@ -19,7 +19,7 @@ const normalizeTopics = (exam) => {
 
   if (exam.totalHours > 0) {
     const topicNames = exam.syllabusTopics?.length > 0
-    ? exam.syllabusTopics.filter(t => typeof t === 'string' && t.trim())
+   ? exam.syllabusTopics.filter(t => typeof t === 'string' && t.trim())
       : ['General'];
 
     const hoursPerTopic = exam.totalHours / topicNames.length;
@@ -39,6 +39,11 @@ const normalizeTopics = (exam) => {
   return [{ name: 'General', hours: DEFAULT_BASE_HOURS_PER_TOPIC }];
 };
 
+// FIX: Force IST date string "YYYY-MM-DD"
+const toISTDateString = (date) => {
+  return new Date(date).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+};
+
 const generateSchedule = (exams, config, missedBlocks = []) => {
   const result = { schedule: [], conflicts: [], warnings: [], metadata: {} };
 
@@ -48,19 +53,22 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
     if (!exam.priority) exam.priority = 3;
   });
 
-  const startDate = new Date(config.startDate);
-  startDate.setUTCHours(0, 0, 0, 0);
+  // FIX: Start date as IST string, not UTC Date
+  const startDateStr = config.startDate? toISTDateString(config.startDate) : toISTDateString(new Date());
+  const startDate = new Date(startDateStr + 'T00:00:00'); // Force local midnight
+  
   const lastExamDate = new Date(Math.max(...exams.map(e => new Date(e.examDate))));
 
   const availableDaysMap = new Map();
   let currentDate = new Date(startDate);
 
   while (currentDate <= lastExamDate) {
-    const dateStr = currentDate.toISOString().split('T')[0];
+    const dateStr = toISTDateString(currentDate); // "2026-05-20"
     const dayName = DAY_NAMES[currentDate.getDay()];
 
     const dayData = {
-      date: new Date(currentDate),
+      date: dateStr, // FIX: String not Date object
+      dateObj: new Date(currentDate), // Keep for comparisons
       sessions: [],
       usedHours: 0,
       examCaps: {},
@@ -89,7 +97,9 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
     currentDate.setDate(currentDate.getDate() + 1);
   }
 
-  const availableDays = Array.from(availableDaysMap.values()).sort((a, b) => a.date - b.date);
+  const availableDays = Array.from(availableDaysMap.values()).sort((a, b) => 
+    new Date(a.date) - new Date(b.date)
+  );
 
   const topics = [];
   let totalRequiredHours = 0;
@@ -102,7 +112,7 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
     const examId = exam._id? exam._id.toString() : exam.subject;
 
     const examDate = new Date(exam.examDate);
-    const daysBeforeExam = availableDays.filter(d => d.date < examDate && d.examCaps[examId]).length;
+    const daysBeforeExam = availableDays.filter(d => new Date(d.date) < examDate && d.examCaps[examId]).length;
     const maxDailyHours = Math.max(...Object.values(exam.availableHours), 0);
     const maxPossibleHours = daysBeforeExam * maxDailyHours;
 
@@ -136,7 +146,7 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
         difficulty: exam.difficulty,
         knowledgeLevel: exam.currentKnowledge,
         userPriority: exam.priority || 3,
-        daysUntilExam: Math.ceil((new Date(exam.examDate) - startDate) / (1000 * 60 * 60 * 24)),
+        daysUntilExam: Math.ceil((new Date(exam.examDate) - new Date(startDateStr)) / (1000 * 60 * 60 * 24)),
         breakRatio: exam.breakRatio
       });
     });
@@ -173,8 +183,8 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
   });
 
   const sortedTopics = topics
-  .filter(t => t.hoursRemaining > 0)
-  .sort((a, b) => {
+ .filter(t => t.hoursRemaining > 0)
+ .sort((a, b) => {
       if (a.userPriority!== b.userPriority) return a.userPriority - b.userPriority;
       if (a.daysUntilExam!== b.daysUntilExam) return a.daysUntilExam - b.daysUntilExam;
       return b.hoursRemaining - a.hoursRemaining;
@@ -185,7 +195,7 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
 
     for (const day of availableDays) {
       if (hoursToSchedule <= 0) break;
-      if (day.date >= new Date(topic.examDate)) continue;
+      if (new Date(day.date) >= new Date(topic.examDate)) continue;
 
       const examCap = day.examCaps[topic.examId];
       if (!examCap) continue;
@@ -212,8 +222,6 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
         const startMin = Math.round(currentMinutes % 60);
         const startTime = `${String(startHour).padStart(2, '0')}:${String(startMin).padStart(2, '0')}`;
 
-        const dateStr = day.date.toISOString().split('T')[0]; // FIXED: String date
-
         day.sessions.push({
           type: 'Study',
           examId: topic.examId,
@@ -222,8 +230,8 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
           topicName: topic.topicName,
           hours: actualStudyHours,
           priority: topic.userPriority,
-          date: dateStr, // FIXED: String not Date
-          startTime, // IST "09:50" - will be converted to UTC in routes
+          date: day.date, // Already "2026-05-20" string
+          startTime, // "09:00" IST string
           duration: actualStudyMinutes,
           isBreak: false,
           isGenerated: true
@@ -249,8 +257,8 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
             color: topic.color,
             topicName: 'Break',
             hours: breakHours,
-            date: dateStr, // FIXED: String not Date
-            startTime: breakStartTime, // IST
+            date: day.date,
+            startTime: breakStartTime,
             duration: breakMinutes,
             isBreak: true,
             isGenerated: true
@@ -282,24 +290,24 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
       if (!examCap) return;
 
       SPACED_INTERVALS.forEach(interval => {
-        const reviewDate = new Date(day.date);
-        reviewDate.setDate(reviewDate.getDate() + interval);
-        const reviewDateStr = reviewDate.toISOString().split('T')[0];
+        const reviewDateObj = new Date(day.date + 'T00:00:00');
+        reviewDateObj.setDate(reviewDateObj.getDate() + interval);
+        const reviewDateStr = toISTDateString(reviewDateObj);
 
-        const reviewDay = availableDays.find(d =>
-          d.date.toISOString().split('T')[0] === reviewDateStr
-        );
+        const reviewDay = availableDays.find(d => d.date === reviewDateStr);
 
         const matchingExam = exams.find(e => {
           const eId = e._id? e._id.toString() : e.subject;
           return eId === session.examId;
         });
 
+        if (!matchingExam) return;
+
         const dayBeforeExam = new Date(matchingExam.examDate);
         dayBeforeExam.setDate(dayBeforeExam.getDate() - 1);
         dayBeforeExam.setHours(23, 59, 59, 999);
 
-        if (reviewDay && matchingExam && reviewDate <= dayBeforeExam) {
+        if (reviewDay && reviewDateObj <= dayBeforeExam) {
           const reviewExamCap = reviewDay.examCaps[session.examId];
           if (!reviewExamCap) return;
 
@@ -325,8 +333,8 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
               topicName: session.topicName,
               hours: reviewHours,
               intervalDay: interval,
-              date: reviewDateStr, // FIXED: String not Date
-              startTime, // IST
+              date: reviewDateStr,
+              startTime,
               duration: reviewMinutes,
               isBreak: false,
               isGenerated: true

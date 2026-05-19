@@ -1,7 +1,7 @@
 const jwt = require('jsonwebtoken');
-const User = require('../models/User'); // You need this import
+const User = require('../models/User');
 
-module.exports = async function(req, res, next) { // ← add async here
+module.exports = async function(req, res, next) {
   const authHeader = req.header('Authorization');
   const token = authHeader?.replace('Bearer ', '');
   if (!token) {
@@ -10,10 +10,14 @@ module.exports = async function(req, res, next) { // ← add async here
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = { _id: decoded.id };
+    const userId = decoded.id || decoded.user?.id; 
+    if (!userId) {
+      return res.status(401).json({ msg: 'Invalid token payload' });
+    }
     
-    // Move the await INSIDE the function
-    await User.findByIdAndUpdate(decoded.id || decoded.user?.id, { lastActive: new Date() });
+    req.user = { _id: userId };
+    
+    await User.findByIdAndUpdate(userId, { lastActive: new Date() });
     next();
   } catch (err) {
     console.error('JWT Error:', err.message);
