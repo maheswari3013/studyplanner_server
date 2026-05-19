@@ -647,5 +647,20 @@ router.get('/export', auth, async (req, res) => {
     res.status(500).json({ msg: 'Server Error' });
   }
 });
+// GET /api/schedule/pending
+router.get('/pending', auth, async (req, res) => {
+  try {
+    const blocks = await StudyBlock.find({ 
+      userId: req.user._id,
+      completed: false,
+      missed: false,
+      isBreak: false
+    }).sort({ date: 1, time: 1 });
+    res.json(blocks);
+  } catch (err) {
+    console.error('Pending route error:', err.message);
+    res.status(500).json({ msg: 'Server error' });
+  }
+});
 
 module.exports = router;
