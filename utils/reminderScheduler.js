@@ -2,6 +2,8 @@ const cron = require('node-cron');
 const webpush = require('web-push');
 const User = require('../models/User');
 const StudyBlock = require('../models/StudyBlock');
+const Exam = require('../models/Exam');
+const { generateSchedule } = require('./scheduler');
 
 webpush.setVapidDetails(
   'mailto:dmaheswari3018@gmail.com',
@@ -9,28 +11,26 @@ webpush.setVapidDetails(
   process.env.VAPID_PRIVATE_KEY
 );
 
-// Runs every minute to check for blocks starting now
+// Runs every minute to check for blocks starting now + overdue blocks
 cron.schedule('* * * * *', async () => {
   try {
     const now = new Date();
     const utcTime = `${String(now.getUTCHours()).padStart(2, '0')}:${String(now.getUTCMinutes()).padStart(2, '0')}`;
-    const today = now.toISOString().split('T')[0]; // "2026-05-20" UTC date
+    const today = now.toISOString().split('T')[0];
 
-    // FIX: Find blocks using UTC startTime
-    const blocks = await StudyBlock.find({
-      startTime: utcTime, // This is UTC "04:20" 
+    // 1. Send reminders for blocks starting now
+    const startingBlocks = await StudyBlock.find({
+      startTime: utcTime,
       date: today,
-      completed: false,
-      missed: false,
+      status: 'scheduled',
       isBreak: false,
       type: { $in: ['Study', 'Review'] }
-    }).populate('userId');
+    }).populate('user');
 
-    for (const block of blocks) {
-      const user = block.userId;
+    for (const block of startingBlocks) {
+      const user = block.user;
       if (!user?.subscriptions?.length) continue;
 
-      // FIX: Use block.time for IST display in notification
       const payload = JSON.stringify({
         title: `Time to ${block.type}: ${block.subject}`,
         body: `Start your ${block.topic} at ${block.time} - ${block.duration} min session`,
@@ -48,12 +48,66 @@ cron.schedule('* * * * *', async () => {
           console.error('Push error:', err.message);
         })
       );
-      
+
       await Promise.all(promises);
       console.log(`Reminder sent: ${block.subject} - ${block.topic} at ${block.time} IST`);
     }
+
+    // 2. Find and reschedule overdue blocks
+    const overdueBlocks = await StudyBlock.find({
+      status: 'scheduled',
+      endTime: { $lt: now },
+      isBreak: false
+    });
+
+    if (overdueBlocks.length > 0) {
+      console.log(`[CRON] Found ${overdueBlocks.length} overdue blocks to reschedule`);
+
+      for (const block of overdueBlocks) {
+        // Mark as overdue
+        block.status = 'overdue';
+        await block.save();
+
+        // Add hours back to topic
+        const exam = await Exam.findOne({ user: block.user, subject: block.subject });
+        if (exam) {
+          const topic = exam.syllabusTopics.find(t => t.name === block.topic);
+          if (topic) {
+            topic.missedHours = (topic.missedHours || 0) + (block.duration / 60);
+            await exam.save();
+            console.log(`[CRON] Added ${(block.duration / 60).toFixed(1)}h back to ${block.topic}`);
+          }
+        }
+      }
+
+      // Regenerate for all affected users
+      const userIds = [...new Set(overdueBlocks.map(b => b.user.toString()))];
+      for (const userId of userIds) {
+        const exams = await Exam.find({ user: userId });
+        const allBlocks = await StudyBlock.find({ user: userId });
+        const config = {
+          startDate: new Date(),
+          startHour: 9,
+          endHour: 23,
+          studyBlock: 25,
+          breakBlock: 5
+        };
+        const result = generateSchedule(exams, config, allBlocks);
+        const newBlocks = result.schedule.flatMap(d => d.sessions.map(s => ({
+          user: userId, subject: s.examName, topic: s.topicName, date: s.date,
+          time: s.startTime, startTime: s.startTime, duration: s.duration,
+          isGenerated: true, isBreak: s.isBreak || false, type: s.type || 'Study',
+          color: s.color, status: 'scheduled'
+        })));
+        if (newBlocks.length > 0) {
+          await StudyBlock.insertMany(newBlocks);
+          console.log(`[CRON] User ${userId}: Generated ${newBlocks.length} replacement blocks`);
+        }
+      }
+    }
+
   } catch (err) {
-    console.error('Reminder cron error:', err);
+    console.error('Cron error:', err);
   }
 });
 
@@ -62,8 +116,8 @@ cron.schedule('1 0 * * *', async () => {
   try {
     const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
     const result = await StudyBlock.updateMany(
-      { date: yesterday, completed: false, missed: false, isBreak: false },
-      { missed: true }
+      { date: yesterday, status: 'scheduled', isBreak: false },
+      { status: 'missed' }
     );
     console.log(`Marked ${result.modifiedCount} blocks as missed from ${yesterday}`);
   } catch (err) {

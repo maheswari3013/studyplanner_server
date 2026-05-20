@@ -1,5 +1,5 @@
 const SPACED_INTERVALS = [1, 3, 7, 14];
-const MIN_BLOCK_HOURS = 0.4;
+const MIN_BLOCK_HOURS = 0.4; // Changed from 0.5 to allow 25min blocks
 const DAY_NAMES = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 const DEFAULT_BASE_HOURS_PER_TOPIC = 10;
 
@@ -13,20 +13,21 @@ const normalizeTopics = (exam) => {
   if (Array.isArray(exam.syllabusTopics) && exam.syllabusTopics.length > 0 && typeof exam.syllabusTopics[0] === 'object') {
     return exam.syllabusTopics.map(t => ({
       name: t.name.trim(),
-      hours: t.hours > 0? t.hours : DEFAULT_BASE_HOURS_PER_TOPIC
+      hours: t.hours > 0? t.hours : DEFAULT_BASE_HOURS_PER_TOPIC,
+      missedHours: t.missedHours || 0 // ADD THIS
     }));
   }
   if (exam.totalHours > 0) {
     const topicNames = exam.syllabusTopics?.length > 0
-     ? exam.syllabusTopics.filter(t => typeof t === 'string' && t.trim())
+    ? exam.syllabusTopics.filter(t => typeof t === 'string' && t.trim())
       : ['General'];
     const hoursPerTopic = exam.totalHours / topicNames.length;
-    return topicNames.map(name => ({ name: name.trim(), hours: hoursPerTopic }));
+    return topicNames.map(name => ({ name: name.trim(), hours: hoursPerTopic, missedHours: 0 }));
   }
   if (Array.isArray(exam.syllabusTopics) && exam.syllabusTopics.length > 0) {
-    return exam.syllabusTopics.map(t => ({ name: t.trim(), hours: DEFAULT_BASE_HOURS_PER_TOPIC })).filter(t => t.name);
+    return exam.syllabusTopics.map(t => ({ name: t.trim(), hours: DEFAULT_BASE_HOURS_PER_TOPIC, missedHours: 0 })).filter(t => t.name);
   }
-  return [{ name: 'General', hours: DEFAULT_BASE_HOURS_PER_TOPIC }];
+  return [{ name: 'General', hours: DEFAULT_BASE_HOURS_PER_TOPIC, missedHours: 0 }];
 };
 
 const toISTDateString = (date) => {
@@ -43,6 +44,7 @@ const isTimeOccupied = (date, startTime, duration, existingBlocks) => {
   const endMin = startMin + duration;
   return existingBlocks.some(b => {
     if (b.date!== date) return false;
+    if (b.status === 'missed' || b.status === 'overdue') return false; // Don't block overdue/missed
     const bStart = timeToMinutes(b.time);
     const bEnd = bStart + b.duration;
     return startMin < bEnd && endMin > bStart;
@@ -50,7 +52,7 @@ const isTimeOccupied = (date, startTime, duration, existingBlocks) => {
 };
 
 function generateSchedule(exams, config, existingBlocks = []) {
-  console.log('EXAM PAYLOAD:', JSON.stringify(exams[0].availableHours));
+  console.log('EXAM PAYLOAD:', JSON.stringify(exams[0]?.availableHours));
   const { startDate, startHour, endHour, studyBlock, breakBlock } = config;
   const result = { schedule: [], conflicts: [], warnings: [], metadata: {} };
 
@@ -58,11 +60,7 @@ function generateSchedule(exams, config, existingBlocks = []) {
   const startDateObj = new Date(startDateStr + 'T00:00:00');
 
   const examDates = exams.map(e => new Date(e.examDate || e.date)).filter(d =>!isNaN(d));
-
-  // FIX: Don't subtract 1 day. Schedule up to exam date.
   const lastExamDate = examDates.length > 0? new Date(Math.max(...examDates)) : new Date(startDateObj);
-
-  // FIX: Calculate days from start to last exam, inclusive
   const daysToSchedule = Math.max(1, Math.ceil((lastExamDate - startDateObj) / (1000 * 60 * 60 * 24)) + 1);
 
   const availableDaysMap = new Map();
@@ -84,7 +82,6 @@ function generateSchedule(exams, config, existingBlocks = []) {
     };
 
     exams.forEach(exam => {
-      // FIX: Use exam.availableHours correctly with lowercase day names
       const examHours = exam.availableHours?.[dayName];
       console.log(`[Scheduler] ${dateStr} ${dayName}: exam ${exam.subject} has ${examHours}h`);
 
@@ -109,12 +106,11 @@ function generateSchedule(exams, config, existingBlocks = []) {
   }
 
   console.log(`[Scheduler] Available days with hours: ${availableDaysMap.size}`);
-
   const availableDays = Array.from(availableDaysMap.values());
 
   existingBlocks.forEach(block => {
     const day = availableDaysMap.get(block.date);
-    if (day) {
+    if (day && block.status!== 'missed' && block.status!== 'overdue') {
       const examCap = Object.values(day.examCaps).find(ec => ec.subject === block.subject);
       if (examCap) {
         examCap.used += block.duration / 60;
@@ -132,24 +128,19 @@ function generateSchedule(exams, config, existingBlocks = []) {
     const topicsList = normalizeTopics(exam);
     const examId = exam._id? exam._id.toString() : exam.subject;
     const examDate = new Date(exam.examDate || exam.date);
-
-    // FIX: Count days before exam, not including exam day
     const daysBeforeExam = availableDays.filter(d => new Date(d.date) < examDate && d.examCaps[examId]).length;
-
-    // FIX: Handle empty availableHours gracefully
     const availableHoursValues = Object.values(exam.availableHours || {});
-    const maxDailyHours = availableHoursValues.length > 0
-     ? Math.max(...availableHoursValues)
-      : (endHour - startHour);
-
+    const maxDailyHours = availableHoursValues.length > 0? Math.max(...availableHoursValues) : (endHour - startHour);
     const maxPossibleHours = daysBeforeExam * maxDailyHours;
 
     console.log(`[Scheduler] Exam ${exam.subject}: daysBeforeExam=${daysBeforeExam}, maxDailyHours=${maxDailyHours}, maxPossible=${maxPossibleHours}`);
 
     topicsList.forEach(topic => {
-      const adjustedHoursPerTopic = topic.hours * difficultyMultiplier * knowledgeMultiplier;
+      const baseHours = topic.hours * difficultyMultiplier * knowledgeMultiplier;
+      const missedHours = topic.missedHours || 0; // ADD THIS
+      const adjustedHoursPerTopic = baseHours + missedHours; // ADD MISSED HOURS
 
-      console.log(`[Scheduler] Topic ${topic.name}: base=${topic.hours}h, adjusted=${adjustedHoursPerTopic.toFixed(1)}h`);
+      console.log(`[Scheduler] Topic ${topic.name}: base=${baseHours.toFixed(1)}h, missed=${missedHours.toFixed(1)}h, total=${adjustedHoursPerTopic.toFixed(1)}h`);
 
       if (adjustedHoursPerTopic > maxPossibleHours && maxPossibleHours > 0) {
         result.conflicts.push({
@@ -175,13 +166,13 @@ function generateSchedule(exams, config, existingBlocks = []) {
         knowledgeLevel: exam.currentKnowledge || 3,
         userPriority: exam.priority || 3,
         daysUntilExam: Math.ceil((examDate - new Date(startDateStr)) / (1000 * 60 * 60 * 24)),
-        breakRatio: exam.breakRatio || { study: 25, break: 5 }
+        breakRatio: exam.breakRatio || { study: 25, break: 5 },
+        missedHours: missedHours // TRACK THIS
       });
     });
   });
 
   const totalAvailableHours = availableDays.reduce((sum, day) => sum + day.totalAvailable, 0);
-
   console.log(`[Scheduler] Total required: ${totalRequiredHours.toFixed(1)}h, Available: ${totalAvailableHours.toFixed(1)}h`);
 
   if (totalRequiredHours > totalAvailableHours) {
@@ -212,7 +203,7 @@ function generateSchedule(exams, config, existingBlocks = []) {
 
     for (const day of availableDays) {
       if (hoursToSchedule <= 0) break;
-      if (new Date(day.date) > new Date(topic.examDate)) continue;
+      if (new Date(day.date) > new Date(topic.examDate)) continue; // FIX: > not >=
 
       const examCap = day.examCaps[topic.examId];
       if (!examCap) continue;
@@ -290,6 +281,9 @@ function generateSchedule(exams, config, existingBlocks = []) {
         }
       }
     }
+
+    topic.missedHours = hoursToSchedule; // Save unscheduled time
+    if (hoursToSchedule <= 0) topic.missedHours = 0;
 
     if (hoursToSchedule > 0.1) {
       console.log(`[Scheduler] Warning: ${topic.topicName} has ${hoursToSchedule.toFixed(1)}h unscheduled`);

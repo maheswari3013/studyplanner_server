@@ -83,7 +83,12 @@ const ExamSchema = new mongoose.Schema({
   createdAt: {
     type: Date,
     default: Date.now
-  }
+  },
+  syllabusTopics: [{
+  name: { type: String, required: true },
+  hours: { type: Number, default: 0 },
+  missedHours: { type: Number, default: 0 } // ADD THIS LINE
+}]
 });
 
 module.exports = mongoose.models.Exam || mongoose.model('Exam', ExamSchema);
