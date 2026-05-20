@@ -278,15 +278,51 @@ router.get('/google/callback', async (req, res) => {
 
 // ===== STATIC POST/DELETE ROUTES =====
 
-// POST /api/schedule/generate
-router.post('/generate', auth, async (req, res) => {
+/router.post('/generate', auth, async (req, res) => {
   try {
-    const { exams, config } = req.body;
+    const { exams } = req.body;
     const userId = req.user._id;
+
+    console.log('=== GENERATE START ===');
+    console.log('User ID:', userId);
+    console.log('Exams count:', exams?.length);
+
     if (!exams || exams.length === 0) return res.status(400).json({ msg: 'No exams provided' });
-    await StudyBlock.deleteMany({ userId, isGenerated: true });
+
+    const deleteResult = await StudyBlock.deleteMany({ userId, isGenerated: true });
+    console.log('Deleted old blocks:', deleteResult.deletedCount);
+
+    const now = new Date();
+    const currentHour = Number(now.toLocaleTimeString('en-GB', {
+      timeZone: 'Asia/Kolkata',
+      hour: '2-digit'
+    }));
+
+    const config = {
+      startDate: new Date(),
+      startHour: Math.max(9, currentHour + 1),
+      endHour: 23,
+      studyBlock: 25,
+      breakBlock: 5,
+      breakRatio: { study: 25, break: 5 }
+    };
+
+    console.log('Config:', config);
+    console.log('Current IST hour:', currentHour);
+
     const result = generateSchedule(exams, config, []);
-    if (result.conflicts?.length > 0) return res.status(400).json({ success: false, conflicts: result.conflicts, msg: 'Schedule conflicts detected' });
+
+    console.log('Scheduler returned:', {
+      days: result.schedule?.length || 0,
+      conflicts: result.conflicts?.length || 0,
+      warnings: result.warnings
+    });
+
+    if (result.conflicts?.length > 0) {
+      console.log('CONFLICTS:', result.conflicts);
+      return res.status(400).json({ success: false, conflicts: result.conflicts, msg: 'Schedule conflicts detected' });
+    }
+
     const blocksToSave = result.schedule.flatMap(day =>
       day.sessions.map(s => ({
         userId,
@@ -306,28 +342,25 @@ router.post('/generate', auth, async (req, res) => {
         missed: false
       }))
     );
-    if (blocksToSave.length > 0) await StudyBlock.insertMany(blocksToSave);
-    res.json({ success: true, count: blocksToSave.length, warnings: result.warnings || [] });
-  } catch (err) {
-    console.error('Generate schedule error:', err);
-    res.status(500).json({ msg: 'Server error', error: err.message });
-  }
-});
 
-// POST /api/schedule/log
-router.post('/log', auth, async (req, res) => {
-  try {
-    const { blockId, actualMinutes } = req.body;
-    if (!mongoose.Types.ObjectId.isValid(blockId)) return res.status(400).json({ msg: 'Invalid block ID' });
-    const block = await StudyBlock.findOneAndUpdate(
-      { _id: blockId, userId: req.user._id },
-      { actualDuration: actualMinutes, loggedAt: new Date(), completed: true },
-      { new: true }
-    );
-    if (!block) return res.status(404).json({ msg: 'Block not found' });
-    res.json(block);
+    console.log('Total blocks to save:', blocksToSave.length);
+    if (blocksToSave.length > 0) {
+      console.log('First block sample:', blocksToSave[0]);
+    }
+
+    if (blocksToSave.length > 0) {
+      await StudyBlock.insertMany(blocksToSave);
+      console.log('INSERTED TO DB:', blocksToSave.length);
+    } else {
+      console.log('NO BLOCKS TO INSERT - SCHEDULER RETURNED EMPTY');
+    }
+
+    res.json({ success: true, count: blocksToSave.length, warnings: result.warnings || [] });
+    console.log('=== GENERATE END ===');
+
   } catch (err) {
-    res.status(500).json({ msg: 'Server Error' });
+    console.error('GENERATE ERROR:', err);
+    res.status(500).json({ msg: 'Server error', error: err.message });
   }
 });
 
