@@ -4,7 +4,7 @@ const cron = require('node-cron');
 const connectDB = require('./config/db');
 const StudyBlock = require('./models/StudyBlock');
 const Exam = require('./models/Exam');
-const { generateSchedule } = require('./utils/scheduler');
+const { generateSchedule, toISTDateString } = require('./utils/scheduler');
 const errorHandler = require('./middleware/errorHandler');
 require('dotenv').config();
 
@@ -42,6 +42,34 @@ const istToUtc = (timeStr) => {
   if (utcM < 0) { utcM += 60; utcH -= 1; }
   if (utcH < 0) utcH += 24;
   return `${String(utcH).padStart(2,'0')}:${String(utcM).padStart(2,'0')}`;
+};
+
+// Helper: Calculate days from today to day before earliest exam
+const calculateDaysToSchedule = (exams) => {
+  if (!exams || exams.length === 0) return 1;
+  
+  const examDates = exams
+    .map(e => new Date(e.examDate || e.date))
+    .filter(d => !isNaN(d))
+    .sort((a, b) => a - b);
+  
+  if (examDates.length === 0) return 7; // Default 7 days
+  
+  const firstExamDate = examDates[0];
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  
+  const examDay = new Date(firstExamDate);
+  examDay.setHours(0, 0, 0, 0);
+  
+  const dayBeforeExam = new Date(examDay);
+  dayBeforeExam.setDate(dayBeforeExam.getDate() - 1);
+  
+  const diffTime = dayBeforeExam - today;
+  const daysToSchedule = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1);
+  
+  console.log(`[SCHEDULE] Exam: ${examDay.toLocaleDateString('en-CA')}, Days to schedule: ${daysToSchedule}`);
+  return daysToSchedule;
 };
 
 // ===== CRON: MARK OVERDUE AS MISSED + AUTO-REGENERATE =====
@@ -98,12 +126,16 @@ cron.schedule('*/1 * * * *', async () => {
       const exams = await Exam.find({ userId });
       if (exams.length === 0) continue;
 
+      // CRITICAL: Calculate daysToSchedule for cron
+      const daysToSchedule = calculateDaysToSchedule(exams);
+
       const config = {
         startDate: new Date(),
         startHour: 9,
         endHour: 22,
         studyBlock: exams[0]?.breakRatio?.study || 50,
         breakBlock: exams[0]?.breakRatio?.break || 10,
+        daysToSchedule: daysToSchedule, // <-- ADDED THIS
         breakRatio: exams[0]?.breakRatio || { study: 50, break: 10 }
       };
 
@@ -142,7 +174,9 @@ cron.schedule('*/1 * * * *', async () => {
           type: s.type || 'Study',
           intervalDay: s.intervalDay,
           priority: s.priority,
-          color: s.color
+          color: s.color,
+          completed: false,
+          missed: false
         })));
 
         if (newBlocks.length > 0) {

@@ -289,8 +289,31 @@ router.post('/generate', auth, async (req, res) => {
 
     if (!exams || exams.length === 0) return res.status(400).json({ msg: 'No exams provided' });
 
-    const deleteResult = await StudyBlock.deleteMany({ userId, isGenerated: true });
-    console.log('Deleted old blocks:', deleteResult.deletedCount);
+    await StudyBlock.deleteMany({ userId, isGenerated: true });
+
+    // Calculate daysToSchedule: from today till day before earliest exam
+    const examDates = exams
+     .map(e => new Date(e.examDate || e.date))
+     .filter(d =>!isNaN(d))
+     .sort((a, b) => a - b);
+
+    let daysToSchedule = 7; // default
+    if (examDates.length > 0) {
+      const firstExamDate = examDates[0];
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      const examDay = new Date(firstExamDate);
+      examDay.setHours(0, 0, 0, 0);
+
+      const dayBeforeExam = new Date(examDay);
+      dayBeforeExam.setDate(dayBeforeExam.getDate() - 1);
+
+      const diffTime = dayBeforeExam - today;
+      daysToSchedule = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1);
+    }
+
+    console.log('Days to schedule:', daysToSchedule);
 
     const now = new Date();
     const currentHour = Number(now.toLocaleTimeString('en-GB', {
@@ -298,17 +321,18 @@ router.post('/generate', auth, async (req, res) => {
       hour: '2-digit'
     }));
 
+    // THIS IS WHERE THE CONFIG GOES
     const config = {
       startDate: new Date(),
       startHour: Math.max(9, currentHour + 1),
       endHour: 23,
       studyBlock: 25,
       breakBlock: 5,
+      daysToSchedule: daysToSchedule, // <-- HERE
       breakRatio: { study: 25, break: 5 }
     };
 
     console.log('Config:', config);
-    console.log('Current IST hour:', currentHour);
 
     const result = generateSchedule(exams, config, []);
 
@@ -319,7 +343,6 @@ router.post('/generate', auth, async (req, res) => {
     });
 
     if (result.conflicts?.length > 0) {
-      console.log('CONFLICTS:', result.conflicts);
       return res.status(400).json({ success: false, conflicts: result.conflicts, msg: 'Schedule conflicts detected' });
     }
 
@@ -344,26 +367,19 @@ router.post('/generate', auth, async (req, res) => {
     );
 
     console.log('Total blocks to save:', blocksToSave.length);
-    if (blocksToSave.length > 0) {
-      console.log('First block sample:', blocksToSave[0]);
-    }
 
     if (blocksToSave.length > 0) {
       await StudyBlock.insertMany(blocksToSave);
       console.log('INSERTED TO DB:', blocksToSave.length);
-    } else {
-      console.log('NO BLOCKS TO INSERT - SCHEDULER RETURNED EMPTY');
     }
 
     res.json({ success: true, count: blocksToSave.length, warnings: result.warnings || [] });
-    console.log('=== GENERATE END ===');
 
   } catch (err) {
     console.error('GENERATE ERROR:', err);
     res.status(500).json({ msg: 'Server error', error: err.message });
   }
 });
-
 // POST /api/schedule/google/sync
 router.post('/google/sync', auth, syncLimiter, async (req, res) => {
   try {
