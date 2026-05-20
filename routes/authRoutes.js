@@ -72,18 +72,21 @@ router.post('/login', async (req, res) => {
     res.status(500).send('Server error');
   }
 });
-
-// GET /api/auth/user
+// @route   GET api/auth/user
+// @desc    Get current user
+// @access  Private
 router.get('/user', auth, async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).select('-password'); // Changed: req.user.id -> req.user._id
+    const user = await User.findById(req.user.id).select('-password');
     if (!user) return res.status(404).json({ msg: 'User not found' });
     res.json(user);
   } catch (err) {
-    console.error('Get user error:', err.message);
-    res.status(500).json({ msg: 'Server error' });
+    console.error(err.message);
+    res.status(500).send('Server Error');
   }
 });
+
+
 
 // PATCH /api/auth/profile
 router.patch('/profile', auth, async (req, res) => {
