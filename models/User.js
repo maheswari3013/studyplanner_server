@@ -25,7 +25,6 @@ const UserSchema = new mongoose.Schema({
   },
   subjectConfidence: { type: Map, of: Number, default: {} },
   showAffirmations: { type: Boolean, default: true },
-  isAdmin: { type: Boolean, default: false },
   theme: {
   type: String,
   enum: ['light', 'dark'],
@@ -40,7 +39,12 @@ const UserSchema = new mongoose.Schema({
   }
 }],
   lastActive: { type: Date, default: Date.now },
-
+role: {
+  type: String,
+  enum: ['user', 'admin'],
+  default: 'user',
+  index: true
+}
 });
 
 module.exports = mongoose.models.User || mongoose.model('User', UserSchema);

@@ -1,136 +1,110 @@
-const router = require('express').Router();
-const mongoose = require('mongoose');
+const express = require('express');
+const router = express.Router();
 const auth = require('../middleware/auth');
-const admin = require('../middleware/admin');
+const isAdmin = require('../middleware/isAdmin');
 const User = require('../models/User');
-const Exam = require('../models/Exam');
 const StudyBlock = require('../models/StudyBlock');
+const Exam = require('../models/Exam');
+const mongoose = require('mongoose');
+const os = require('os');
 
-router.get('/stats', auth, admin, async (req, res) => {
+// Protect all admin routes
+router.use(auth, isAdmin);
+
+// GET /api/admin/health - Server + DB health
+router.get('/health', async (req, res) => {
   try {
-    const totalUsers = await User.countDocuments();
-    const totalExams = await Exam.countDocuments();
-
-    const hoursAgg = await StudyBlock.aggregate([
-      { $match: { completed: true, isBreak: false } },
-      { $group: {
-        _id: null,
-        total: { $sum: { $ifNull: ['$actualDuration', '$duration'] } }
-      }}
-    ]);
-    const totalHours = hoursAgg[0]? hoursAgg[0].total / 60 : 0;
-
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const activeToday = await StudyBlock.distinct('userId', {
-      loggedAt: { $gte: today }
-    });
+    const dbState = ['disconnected', 'connected', 'connecting', 'disconnecting'];
+    const memUsage = process.memoryUsage();
 
     res.json({
-      totalUsers,
-      totalExams,
-      totalHours: Number(totalHours.toFixed(1)),
-      activeToday: activeToday.length
+      status: 'ok',
+      db: dbState[mongoose.connection.readyState],
+      uptime: Math.floor(process.uptime() / 60), // minutes
+      memory: {
+        used: Math.round(memUsage.heapUsed / 1024 / 1024), // MB
+        total: Math.round(memUsage.heapTotal / 1024 / 1024), // MB
+        rss: Math.round(memUsage.rss / 1024 / 1024) // MB
+      },
+      cpu: os.loadavg()[0].toFixed(2), // 1min load avg
+      nodeVersion: process.version,
+      timestamp: new Date()
     });
   } catch (err) {
-    console.error('Admin stats error:', err);
-    res.status(500).json({ msg: 'Server error' });
+    res.status(500).json({ status: 'error', msg: err.message });
   }
 });
 
-router.get('/users', auth, admin, async (req, res) => {
+// GET /api/admin/metrics - Aggregates only, no PII
+router.get('/metrics', async (req, res) => {
   try {
-    const users = await User.aggregate([
-      {
-        $lookup: {
-          from: 'exams',
-          localField: '_id',
-          foreignField: 'userId',
-          as: 'exams'
-        }
+    const now = new Date();
+    const last24h = new Date(now - 24 * 60 * 60 * 1000);
+    const last7d = new Date(now - 7 * 24 * 60 * 60 * 1000);
+    const today = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+
+    const [
+      totalUsers,
+      activeUsers24h,
+      activeUsers7d,
+      totalBlocks,
+      completedToday,
+      missedToday,
+      overdueBlocks
+    ] = await Promise.all([
+      User.countDocuments({}),
+      StudyBlock.distinct('user', { updatedAt: { $gte: last24h } }).then(arr => arr.length),
+      StudyBlock.distinct('user', { updatedAt: { $gte: last7d } }).then(arr => arr.length),
+      StudyBlock.countDocuments({}),
+      StudyBlock.countDocuments({ status: 'completed', date: today }),
+      StudyBlock.countDocuments({ status: 'missed', date: today }),
+      StudyBlock.countDocuments({ status: 'overdue' })
+    ]);
+
+    res.json({
+      users: {
+        total: totalUsers,
+        active24h: activeUsers24h,
+        active7d: activeUsers7d
       },
-      {
-        $lookup: {
-          from: 'studyblocks',
-          let: { userId: '$_id' },
-          pipeline: [
-            {
-              $match: {
-                $expr: { $eq: ['$userId', '$$userId'] },
-                completed: true,
-                isBreak: false
-              }
-            },
-            {
-              $group: {
-                _id: null,
-                total: { $sum: { $ifNull: ['$actualDuration', '$duration'] } },
-                lastActive: { $max: '$loggedAt' }
-              }
-            }
-          ],
-          as: 'stats'
-        }
+      blocks: {
+        total: totalBlocks,
+        completedToday,
+        missedToday,
+        overdue: overdueBlocks
       },
-      {
-        $project: {
-          name: 1,
-          email: 1,
-          createdAt: 1,
-          isAdmin: 1,
-          examCount: { $size: '$exams' },
-          totalHours: {
-            $divide: [{ $ifNull: [{ $arrayElemAt: ['$stats.total', 0] }, 0] }, 60]
-          },
-          lastActive: { $arrayElemAt: ['$stats.lastActive', 0] }
-        }
-      }
-    ]);
-
-    res.json(users);
+      timestamp: now
+    });
   } catch (err) {
-    console.error('Admin users error:', err);
-    res.status(500).json({ msg: 'Server error' });
+    res.status(500).json({ msg: 'Server error', error: err.message });
   }
 });
 
-router.delete('/users/:id', auth, admin, async (req, res) => {
+// GET /api/admin/errors - Cron + scheduler failure detection
+router.get('/errors', async (req, res) => {
   try {
-    const { id } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ msg: 'Invalid user ID' });
-    }
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
 
-    await Promise.all([
-      User.findByIdAndDelete(id),
-      Exam.deleteMany({ userId: id }),
-      StudyBlock.deleteMany({ userId: id })
+    // Cron failure: overdue blocks stuck > 1h means cron didn't reschedule
+    const stuckOverdue = await StudyBlock.countDocuments({
+      status: 'overdue',
+      updatedAt: { $lt: oneHourAgo }
+    });
+
+    // Scheduler failure: topics with >10h missed = can't fit in schedule
+    const problemExams = await Exam.aggregate([
+      { $unwind: '$syllabusTopics' },
+      { $match: { 'syllabusTopics.missedHours': { $gt: 10 } } },
+      { $count: 'count' }
     ]);
 
-    res.json({ msg: 'User and all data deleted' });
+    res.json({
+      cronFailures: stuckOverdue,
+      schedulerFailures: problemExams[0]?.count || 0,
+      lastChecked: new Date()
+    });
   } catch (err) {
-    console.error('Delete user error:', err);
-    res.status(500).json({ msg: 'Server error' });
-  }
-});
-
-router.post('/users/:id/reset', auth, admin, async (req, res) => {
-  try {
-    const { id } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ msg: 'Invalid user ID' });
-    }
-
-    await Promise.all([
-      Exam.deleteMany({ userId: id }),
-      StudyBlock.deleteMany({ userId: id }),
-      User.findByIdAndUpdate(id, { $unset: { subjectConfidence: 1 } })
-    ]);
-
-    res.json({ msg: 'User study data reset' });
-  } catch (err) {
-    console.error('Reset user error:', err);
-    res.status(500).json({ msg: 'Server error' });
+    res.status(500).json({ msg: 'Server error', error: err.message });
   }
 });
 
