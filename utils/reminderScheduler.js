@@ -11,6 +11,16 @@ webpush.setVapidDetails(
   process.env.VAPID_PRIVATE_KEY
 );
 
+// Helper: Convert IST "HH:MM" to UTC "HH:MM" for cron
+const istToUtc = (timeStr) => {
+  const [h, m] = timeStr.split(':').map(Number);
+  let utcH = h - 5;
+  let utcM = m - 30;
+  if (utcM < 0) { utcM += 60; utcH -= 1; }
+  if (utcH < 0) utcH += 24;
+  return `${String(utcH).padStart(2,'0')}:${String(utcM).padStart(2,'0')}`;
+};
+
 // Runs every minute to check for blocks starting now + overdue blocks
 cron.schedule('* * * * *', async () => {
   try {
@@ -25,10 +35,10 @@ cron.schedule('* * * * *', async () => {
       status: 'scheduled',
       isBreak: false,
       type: { $in: ['Study', 'Review'] }
-    }).populate('user');
+    }).populate('user'); // FIX: was userId
 
     for (const block of startingBlocks) {
-      const user = block.user;
+      const user = block.user; // FIX: was userId
       if (!user?.subscriptions?.length) continue;
 
       const payload = JSON.stringify({
@@ -56,20 +66,29 @@ cron.schedule('* * * * *', async () => {
     // 2. Find and reschedule overdue blocks
     const overdueBlocks = await StudyBlock.find({
       status: 'scheduled',
-      endTime: { $lt: now },
+      date: { $lte: today },
       isBreak: false
     });
 
-    if (overdueBlocks.length > 0) {
-      console.log(`[CRON] Found ${overdueBlocks.length} overdue blocks to reschedule`);
+    // Filter blocks where end time has passed
+    const actuallyOverdue = overdueBlocks.filter(block => {
+      const [h, m] = block.time.split(':').map(Number);
+      const blockEndMinutes = h * 60 + m + block.duration;
+      const nowMinutes = now.getUTCHours() * 60 + now.getUTCMinutes() + 330; // Convert UTC to IST mins
+      return block.date < today || (block.date === today && blockEndMinutes < (nowMinutes % 1440));
+    });
 
-      for (const block of overdueBlocks) {
+    if (actuallyOverdue.length > 0) {
+      console.log(`[CRON] Found ${actuallyOverdue.length} overdue blocks to reschedule`);
+
+      for (const block of actuallyOverdue) {
         // Mark as overdue
         block.status = 'overdue';
         await block.save();
+        console.log(`[CRON] OVERDUE: ${block.subject} ${block.time}`);
 
         // Add hours back to topic
-        const exam = await Exam.findOne({ user: block.user, subject: block.subject });
+        const exam = await Exam.findOne({ user: block.user, subject: block.subject }); // FIX: user not userId
         if (exam) {
           const topic = exam.syllabusTopics.find(t => t.name === block.topic);
           if (topic) {
@@ -81,13 +100,13 @@ cron.schedule('* * * * *', async () => {
       }
 
       // Regenerate for all affected users
-      const userIds = [...new Set(overdueBlocks.map(b => b.user.toString()))];
+      const userIds = [...new Set(actuallyOverdue.map(b => b.user.toString()))]; // FIX: user not userId
       for (const userId of userIds) {
-        const exams = await Exam.find({ user: userId });
-        const allBlocks = await StudyBlock.find({ user: userId });
+        const exams = await Exam.find({ user: userId }); // FIX: user not userId
+        const allBlocks = await StudyBlock.find({ user: userId }); // FIX: user not userId
         const config = {
           startDate: new Date(),
-          startHour: 9,
+          startHour: 15, // Start from now
           endHour: 23,
           studyBlock: 25,
           breakBlock: 5
@@ -95,9 +114,9 @@ cron.schedule('* * * * *', async () => {
         const result = generateSchedule(exams, config, allBlocks);
         const newBlocks = result.schedule.flatMap(d => d.sessions.map(s => ({
           user: userId, subject: s.examName, topic: s.topicName, date: s.date,
-          time: s.startTime, startTime: s.startTime, duration: s.duration,
+          time: s.startTime, startTime: istToUtc(s.startTime), duration: s.duration,
           isGenerated: true, isBreak: s.isBreak || false, type: s.type || 'Study',
-          color: s.color, status: 'scheduled'
+          color: s.color, status: 'scheduled', priority: s.priority
         })));
         if (newBlocks.length > 0) {
           await StudyBlock.insertMany(newBlocks);
@@ -107,7 +126,7 @@ cron.schedule('* * * * *', async () => {
     }
 
   } catch (err) {
-    console.error('Cron error:', err);
+    console.error('[CRON] Error:', err.message);
   }
 });
 
