@@ -18,7 +18,7 @@ const normalizeTopics = (exam) => {
   }
   if (exam.totalHours > 0) {
     const topicNames = exam.syllabusTopics?.length > 0
-     ? exam.syllabusTopics.filter(t => typeof t === 'string' && t.trim())
+    ? exam.syllabusTopics.filter(t => typeof t === 'string' && t.trim())
       : ['General'];
     const hoursPerTopic = exam.totalHours / topicNames.length;
     return topicNames.map(name => ({ name: name.trim(), hours: hoursPerTopic }));
@@ -33,14 +33,6 @@ const toISTDateString = (date) => {
   return new Date(date).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 };
 
-function addMinutes(time, mins) {
-  const [h, m] = time.split(':').map(Number);
-  const totalMins = h * 60 + m + Math.round(mins);
-  const newH = Math.floor(totalMins / 60) % 24;
-  const newM = totalMins % 60;
-  return `${String(newH).padStart(2, '0')}:${String(newM).padStart(2, '0')}`;
-}
-
 function timeToMinutes(time) {
   const [h, m] = time.split(':').map(Number);
   return h * 60 + m;
@@ -49,7 +41,6 @@ function timeToMinutes(time) {
 const isTimeOccupied = (date, startTime, duration, existingBlocks) => {
   const startMin = timeToMinutes(startTime);
   const endMin = startMin + duration;
-
   return existingBlocks.some(b => {
     if (b.date!== date) return false;
     const bStart = timeToMinutes(b.time);
@@ -64,41 +55,37 @@ function generateSchedule(exams, config, existingBlocks = []) {
 
   const startDateStr = startDate? toISTDateString(startDate) : toISTDateString(new Date());
   const startDateObj = new Date(startDateStr + 'T00:00:00');
-  
-  // Calculate last exam date
-  const examDates = exams.map(e => new Date(e.examDate || e.date));
-  const lastExamDate = new Date(Math.max(...examDates));
+
+  const examDates = exams.map(e => new Date(e.examDate || e.date)).filter(d =>!isNaN(d));
+  const lastExamDate = examDates.length > 0? new Date(Math.max(...examDates)) : new Date(startDateObj);
+  lastExamDate.setDate(lastExamDate.getDate() + 1);
 
   const availableDaysMap = new Map();
   let currentDate = new Date(startDateObj);
-
-  // Build available days map up to day before last exam
-  const maxDate = new Date(lastExamDate);
-  maxDate.setDate(maxDate.getDate() - 1);
-  
   let dayCount = 0;
-  while (currentDate <= maxDate && dayCount < daysToSchedule) {
+
+  while (currentDate <= lastExamDate && dayCount < daysToSchedule) {
     const dateStr = toISTDateString(currentDate);
     const dayName = DAY_NAMES[currentDate.getDay()];
-    const dayData = { 
-      date: dateStr, 
-      dateObj: new Date(currentDate), 
-      sessions: [], 
-      usedHours: 0, 
-      examCaps: {}, 
-      totalAvailable: 0 
+    const dayData = {
+      date: dateStr,
+      dateObj: new Date(currentDate),
+      sessions: [],
+      usedHours: 0,
+      examCaps: {},
+      totalAvailable: 0
     };
 
     exams.forEach(exam => {
-      const examHours = exam.availableHours?.[dayName] || (endHour - startHour); // Default to full day if not specified
+      const examHours = exam.availableHours?.[dayName] || (endHour - startHour);
       if (examHours > 0) {
         const examKey = exam._id? exam._id.toString() : exam.subject;
-        dayData.examCaps[examKey] = { 
-          available: examHours, 
-          used: 0, 
-          breakRatio: exam.breakRatio || { study: 25, break: 5 }, 
-          subject: exam.subject, 
-          color: exam.color || '#3B82F6' 
+        dayData.examCaps[examKey] = {
+          available: examHours,
+          used: 0,
+          breakRatio: exam.breakRatio || { study: 25, break: 5 },
+          subject: exam.subject,
+          color: exam.color || '#3B82F6'
         };
         dayData.totalAvailable += examHours;
       }
@@ -111,9 +98,8 @@ function generateSchedule(exams, config, existingBlocks = []) {
     currentDate.setDate(currentDate.getDate() + 1);
   }
 
-  const availableDays = Array.from(availableDaysMap.values()).sort((a, b) => new Date(a.date) - new Date(b.date));
+  const availableDays = Array.from(availableDaysMap.values());
 
-  // Add existing blocks to prevent double-booking
   existingBlocks.forEach(block => {
     const day = availableDaysMap.get(block.date);
     if (day) {
@@ -141,31 +127,29 @@ function generateSchedule(exams, config, existingBlocks = []) {
     topicsList.forEach(topic => {
       const adjustedHoursPerTopic = topic.hours * difficultyMultiplier * knowledgeMultiplier;
       if (adjustedHoursPerTopic > maxPossibleHours && maxPossibleHours > 0) {
-        result.conflicts.push({ 
-          type: 'TOPIC_IMPOSSIBLE', 
-          message: `Topic "${topic.name}" in ${exam.subject} needs ${adjustedHoursPerTopic.toFixed(1)}h but only ${maxPossibleHours.toFixed(1)}h possible.`, 
-          examName: exam.subject, 
-          topicName: topic.name, 
-          required: adjustedHoursPerTopic, 
-          maxPossible: maxPossibleHours, 
-          daysBeforeExam, 
-          maxDailyHours 
+        result.conflicts.push({
+          type: 'TOPIC_IMPOSSIBLE',
+          message: `Topic "${topic.name}" in ${exam.subject} needs ${adjustedHoursPerTopic.toFixed(1)}h but only ${maxPossibleHours.toFixed(1)}h possible.`,
+          examName: exam.subject,
+          topicName: topic.name,
+          required: adjustedHoursPerTopic,
+          maxPossible: maxPossibleHours
         });
       }
       totalRequiredHours += adjustedHoursPerTopic;
-      topics.push({ 
-        examId, 
-        examName: exam.subject, 
-        examDate: exam.examDate || exam.date, 
-        color: exam.color || '#3B82F6', 
-        topicName: topic.name, 
-        baseHoursPerTopic: topic.hours, 
-        adjustedHoursPerTopic, 
-        hoursRemaining: adjustedHoursPerTopic, 
-        difficulty: exam.difficulty || 3, 
-        knowledgeLevel: exam.currentKnowledge || 3, 
-        userPriority: exam.priority || 3, 
-        daysUntilExam: Math.ceil((new Date(exam.examDate || exam.date) - new Date(startDateStr)) / (1000 * 60 * 60 * 24)), 
+      topics.push({
+        examId,
+        examName: exam.subject,
+        examDate: exam.examDate || exam.date,
+        color: exam.color || '#3B82F6',
+        topicName: topic.name,
+        baseHoursPerTopic: topic.hours,
+        adjustedHoursPerTopic,
+        hoursRemaining: adjustedHoursPerTopic,
+        difficulty: exam.difficulty || 3,
+        knowledgeLevel: exam.currentKnowledge || 3,
+        userPriority: exam.priority || 3,
+        daysUntilExam: Math.ceil((examDate - new Date(startDateStr)) / (1000 * 60 * 60 * 24)),
         breakRatio: exam.breakRatio || { study: 25, break: 5 }
       });
     });
@@ -174,15 +158,15 @@ function generateSchedule(exams, config, existingBlocks = []) {
   const totalAvailableHours = availableDays.reduce((sum, day) => sum + day.totalAvailable, 0);
   if (totalRequiredHours > totalAvailableHours) {
     const deficit = totalRequiredHours - totalAvailableHours;
-    result.conflicts.push({ 
-      type: 'INSUFFICIENT_TIME', 
-      message: `Need ${deficit.toFixed(1)} more hours total.`, 
-      required: totalRequiredHours, 
-      available: totalAvailableHours, 
-      deficit 
+    result.conflicts.push({
+      type: 'INSUFFICIENT_TIME',
+      message: `Need ${deficit.toFixed(1)} more hours total.`,
+      required: totalRequiredHours,
+      available: totalAvailableHours,
+      deficit
     });
   }
-  
+
   if (result.conflicts.some(c => c.type === 'TOPIC_IMPOSSIBLE')) {
     result.metadata = { totalRequiredHours, totalAvailableHours, status: 'FAILED_VALIDATION' };
     return result;
@@ -204,9 +188,8 @@ function generateSchedule(exams, config, existingBlocks = []) {
       let examDayRemaining = examCap.available - examCap.used;
       if (examDayRemaining < MIN_BLOCK_HOURS) continue;
 
-      const globalBreakRatio = config.breakRatio || examCap.breakRatio;
-      const studyMinutes = studyBlock || globalBreakRatio.study;
-      const breakMinutes = breakBlock || globalBreakRatio.break;
+      const studyMinutes = studyBlock || examCap.breakRatio.study;
+      const breakMinutes = breakBlock || examCap.breakRatio.break;
       const blockHours = studyMinutes / 60;
       const breakHours = breakMinutes / 60;
 
@@ -226,19 +209,19 @@ function generateSchedule(exams, config, existingBlocks = []) {
           continue;
         }
 
-        day.sessions.push({ 
-          type: 'Study', 
-          examId: topic.examId, 
-          examName: topic.examName, 
-          color: topic.color, 
-          topicName: topic.topicName, 
-          hours: actualStudyHours, 
-          priority: topic.userPriority, 
-          date: day.date, 
-          startTime, 
-          duration: actualStudyMinutes, 
-          isBreak: false, 
-          isGenerated: true 
+        day.sessions.push({
+          type: 'Study',
+          examId: topic.examId,
+          examName: topic.examName,
+          color: topic.color,
+          topicName: topic.topicName,
+          hours: actualStudyHours,
+          priority: topic.userPriority,
+          date: day.date,
+          startTime,
+          duration: actualStudyMinutes,
+          isBreak: false,
+          isGenerated: true
         });
 
         currentMinutes += actualStudyMinutes;
@@ -250,22 +233,20 @@ function generateSchedule(exams, config, existingBlocks = []) {
         const canAddBreak = currentMinutes + breakMinutes <= endHour * 60 && examDayRemaining > 0.01 && hoursToSchedule > 0;
         if (canAddBreak) {
           const breakStartTime = `${String(Math.floor(currentMinutes / 60)).padStart(2, '0')}:${String(Math.round(currentMinutes % 60)).padStart(2, '0')}`;
-
           if (!isTimeOccupied(day.date, breakStartTime, breakMinutes, existingBlocks)) {
-            day.sessions.push({ 
-              type: 'Break', 
-              examId: topic.examId, 
-              examName: topic.examName, 
-              color: '#10B981', 
-              topicName: 'Break', 
-              hours: breakHours, 
-              date: day.date, 
-              startTime: breakStartTime, 
-              duration: breakMinutes, 
-              isBreak: true, 
-              isGenerated: true 
+            day.sessions.push({
+              type: 'Break',
+              examId: topic.examId,
+              examName: topic.examName,
+              color: '#10B981',
+              topicName: 'Break',
+              hours: breakHours,
+              date: day.date,
+              startTime: breakStartTime,
+              duration: breakMinutes,
+              isBreak: true,
+              isGenerated: true
             });
-
             const actualBreakHours = Math.min(breakHours, examDayRemaining);
             examCap.used += actualBreakHours;
             day.usedHours += actualBreakHours;
@@ -278,96 +259,25 @@ function generateSchedule(exams, config, existingBlocks = []) {
       }
     }
     if (hoursToSchedule > 0.1) {
-      result.warnings.push({ 
-        topic: `${topic.examName} - ${topic.topicName}`, 
-        message: `Could not schedule ${hoursToSchedule.toFixed(1)}h.`, 
-        hoursUnscheduled: hoursToSchedule 
+      result.warnings.push({
+        topic: `${topic.examName} - ${topic.topicName}`,
+        message: `Could not schedule ${hoursToSchedule.toFixed(1)}h.`,
+        hoursUnscheduled: hoursToSchedule
       });
     }
   }
 
-  // SPACED REPETITION
-  availableDays.forEach(day => {
-    day.sessions.filter(s => s.type === 'Study').forEach(session => {
-      const examCap = day.examCaps[session.examId];
-      if (!examCap) return;
-      SPACED_INTERVALS.forEach(interval => {
-        const reviewDateObj = new Date(day.date + 'T00:00:00');
-        reviewDateObj.setDate(reviewDateObj.getDate() + interval);
-        const reviewDateStr = toISTDateString(reviewDateObj);
-        const reviewDay = availableDays.find(d => d.date === reviewDateStr);
-        const matchingExam = exams.find(e => (e._id? e._id.toString() : e.subject) === session.examId);
-        if (!matchingExam) return;
-        const dayBeforeExam = new Date(matchingExam.examDate || matchingExam.date);
-        dayBeforeExam.setDate(dayBeforeExam.getDate() - 1);
-        dayBeforeExam.setHours(23, 59, 59, 999);
-        if (reviewDay && reviewDateObj <= dayBeforeExam) {
-          const reviewExamCap = reviewDay.examCaps[session.examId];
-          if (!reviewExamCap) return;
-          const reviewHours = 0.5;
-          const reviewMinutes = 30;
-          if (reviewExamCap.available - reviewExamCap.used >= reviewHours) {
-            let currentMinutes = startHour * 60 + reviewDay.usedHours * 60;
-            if (currentMinutes + reviewMinutes > endHour * 60) return;
-            const startTime = `${String(Math.floor(currentMinutes / 60)).padStart(2, '0')}:${String(Math.round(currentMinutes % 60)).padStart(2, '0')}`;
-
-            if (!isTimeOccupied(reviewDateStr, startTime, reviewMinutes, existingBlocks)) {
-              reviewDay.sessions.push({ 
-                type: 'Review', 
-                examId: session.examId, 
-                examName: session.examName, 
-                color: session.color, 
-                topicName: session.topicName, 
-                hours: reviewHours, 
-                intervalDay: interval, 
-                date: reviewDateStr, 
-                startTime, 
-                duration: reviewMinutes, 
-                isBreak: false, 
-                isGenerated: true 
-              });
-              reviewExamCap.used += reviewHours;
-              reviewDay.usedHours += reviewHours;
-            }
-          }
-        }
-      });
-    });
-  });
-
-  result.schedule = availableDays.map(day => ({ 
-    date: day.date, 
-    sessions: day.sessions.sort((a, b) => a.startTime.localeCompare(b.startTime)) 
+  result.schedule = availableDays.map(day => ({
+    date: day.date,
+    sessions: day.sessions.sort((a, b) => a.startTime.localeCompare(b.startTime))
   }));
-  
-  result.metadata = { 
-    totalRequiredHours, 
-    totalAvailableHours, 
-    status: result.conflicts.length > 0? 'HAS_CONFLICTS' : 'OK', 
-    topicsBreakdown: topics.map(t => ({ 
-      examId: t.examId, 
-      examName: t.examName, 
-      topicName: t.topicName, 
-      baseHours: t.baseHoursPerTopic, 
-      adjustedHours: t.adjustedHoursPerTopic, 
-      difficulty: t.difficulty, 
-      knowledgeLevel: t.knowledgeLevel, 
-      priority: t.userPriority, 
-      color: t.color 
-    })), 
-    exams: exams.map(e => ({ 
-      subject: e.subject, 
-      examDate: e.examDate || e.date, 
-      difficulty: e.difficulty, 
-      currentKnowledge: e.currentKnowledge, 
-      priority: e.priority, 
-      availableHours: e.availableHours, 
-      breakRatio: e.breakRatio, 
-      color: e.color, 
-      mode: e.totalHours? 'subject' : 'topic' 
-    })) 
+
+  result.metadata = {
+    totalRequiredHours,
+    totalAvailableHours,
+    status: result.conflicts.length > 0? 'HAS_CONFLICTS' : 'OK'
   };
-  
+
   return result;
 }
 
