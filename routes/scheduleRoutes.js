@@ -29,6 +29,8 @@ const getOAuth2Client = () => new google.auth.OAuth2(
   process.env.GOOGLE_REDIRECT_URI
 );
 
+// ===== STATIC GET ROUTES FIRST =====
+
 // GET /api/schedule - Get all blocks
 router.get('/', auth, async (req, res) => {
   try {
@@ -40,52 +42,41 @@ router.get('/', auth, async (req, res) => {
   }
 });
 
-// GET /api/schedule/today - FIX: Show ALL blocks including breaks
+// GET /api/schedule/today - Show ALL blocks including breaks
 router.get('/today', auth, async (req, res) => {
   try {
     const userId = req.user._id;
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-
-    const blocks = await StudyBlock.find({
-      userId,
-      date: today
-      // REMOVED isBreak filter
-    }).sort({ time: 1 });
-
+    const blocks = await StudyBlock.find({ userId, date: today }).sort({ time: 1 });
     res.json(blocks);
   } catch (err) {
     console.error('Today route error:', err.message);
     res.status(500).json({ msg: 'Server error' });
   }
 });
+
 // GET /api/schedule/stats
 router.get('/stats', auth, async (req, res) => {
   try {
     const userId = req.user._id;
     const blocks = await StudyBlock.find({ userId, isBreak: false });
-
     let total = 0, completed = 0, missed = 0;
     const bySubject = {};
-
     blocks.forEach(block => {
       const hours = (block.duration || 0) / 60;
       const subject = block.subject || 'Other';
-
       total += hours;
       if (block.completed) completed += hours;
       if (block.missed) missed += hours;
-
       if (!bySubject[subject]) bySubject[subject] = { total: 0, completed: 0 };
       bySubject[subject].total += hours;
       if (block.completed) bySubject[subject].completed += hours;
     });
-
     const bySubjectArray = Object.entries(bySubject).map(([subject, data]) => ({
       _id: subject,
       total: Number(data.total.toFixed(1)),
       completed: Number(data.completed.toFixed(1))
     }));
-
     res.json({
       total: Number(total.toFixed(1)),
       completed: Number(completed.toFixed(1)),
@@ -105,305 +96,17 @@ router.get('/exams', auth, async (req, res) => {
   try {
     const userId = req.user._id;
     const exams = await Exam.find({ userId });
-
     const examsWithStats = await Promise.all(exams.map(async (exam) => {
       const blocks = await StudyBlock.find({ userId, subject: exam.subject, isBreak: false });
       const totalHours = blocks.reduce((sum, b) => sum + b.duration / 60, 0);
       const completedHours = blocks.filter(b => b.completed).reduce((sum, b) => sum + b.duration / 60, 0);
-
       return {
-       ...exam.toObject(),
+      ...exam.toObject(),
         totalScheduledHours: Number(totalHours.toFixed(1)),
         completedHours: Number(completedHours.toFixed(1))
       };
     }));
-
     res.json(examsWithStats);
-  } catch (err) {
-    res.status(500).json({ msg: 'Server Error' });
-  }
-});
-
-// POST /api/schedule/generate - FIX 5: Save IST time for display
-router.post('/generate', auth, async (req, res) => {
-  try {
-    const { exams, config } = req.body;
-    const userId = req.user._id;
-
-    if (!exams || exams.length === 0) {
-      return res.status(400).json({ msg: 'No exams provided' });
-    }
-
-    await StudyBlock.deleteMany({ userId, isGenerated: true });
-    const result = generateSchedule(exams, config, []);
-
-    if (result.conflicts?.length > 0) {
-      return res.status(400).json({ success: false, conflicts: result.conflicts, msg: 'Schedule conflicts detected' });
-    }
-
-    const blocksToSave = result.schedule.flatMap(day =>
-      day.sessions.map(s => ({
-        userId,
-        subject: s.examName,
-        topic: s.topicName,
-        date: s.date, // "2026-05-20" string
-        time: s.startTime, // IST "09:50" for UI display
-        startTime: istToUtc(s.startTime), // UTC "04:20" for cron reminders
-        duration: s.duration,
-        isGenerated: true,
-        isBreak: s.isBreak || false,
-        type: s.type || 'Study',
-        intervalDay: s.intervalDay,
-        priority: s.priority,
-        color: s.color,
-        completed: false,
-        missed: false
-      }))
-    );
-
-    if (blocksToSave.length > 0) {
-      await StudyBlock.insertMany(blocksToSave);
-    }
-
-    res.json({ success: true, count: blocksToSave.length, warnings: result.warnings || [] });
-  } catch (err) {
-    console.error('Generate schedule error:', err);
-    res.status(500).json({ msg: 'Server error', error: err.message });
-  }
-});
-
-// PATCH /api/schedule/:id/complete
-router.patch('/:id/complete', auth, async (req, res) => {
-  try {
-    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
-      return res.status(400).json({ msg: 'Invalid block ID' });
-    }
-    const block = await StudyBlock.findOneAndUpdate(
-      { _id: req.params.id, userId: req.user._id },
-      { completed: true, missed: false },
-      { new: true }
-    );
-    if (!block) return res.status(404).json({ msg: 'Block not found' });
-    res.json(block);
-  } catch (err) {
-    console.error('Complete error:', err);
-    res.status(500).json({ msg: 'Server Error' });
-  }
-});
-
-// PATCH /api/schedule/:id/missed - FIX 2: Auto-reschedule + fix 400
-router.patch('/:id/missed', auth, async (req, res) => {
-  try {
-    const userId = req.user._id;
-    const blockId = req.params.id;
-
-    if (!mongoose.Types.ObjectId.isValid(blockId)) {
-      return res.status(400).json({ msg: 'Invalid block ID' });
-    }
-
-    const missedBlock = await StudyBlock.findOneAndUpdate(
-      { _id: blockId, userId },
-      { missed: true, completed: false },
-      { new: true }
-    );
-    if (!missedBlock) return res.status(404).json({ msg: 'Block not found' });
-    if (missedBlock.isBreak) {
-      return res.status(400).json({ success: false, msg: 'Breaks cannot be marked as missed' });
-    }
-
-    const exam = await Exam.findOne({ userId: userId, subject: missedBlock.subject });
-    if (!exam) {
-      return res.json({ success: true, msg: 'Marked as missed. No exam found to reschedule.', missedBlock });
-    }
-
-    const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-    const futureBlocks = await StudyBlock.find({
-      userId,
-      subject: missedBlock.subject,
-      date: { $gte: todayStr },
-      isGenerated: true,
-      completed: false,
-      missed: false,
-      isBreak: false
-    });
-
-    const missedMinutes = missedBlock.duration;
-    const futureMinutes = futureBlocks.reduce((sum, b) => sum + b.duration, 0);
-    const totalMinutesToReschedule = missedMinutes + futureMinutes;
-
-    if (totalMinutesToReschedule === 0) {
-      return res.json({ msg: 'No blocks to reschedule', missedBlock });
-    }
-
-    await StudyBlock.deleteMany({
-      userId,
-      subject: missedBlock.subject,
-      date: { $gte: todayStr },
-      isGenerated: true,
-      completed: false
-    });
-
-    const config = {
-      startDate: new Date(),
-      startHour: 9,
-      endHour: 18,
-      studyBlock: exam.breakRatio?.study || 50,
-      breakBlock: exam.breakRatio?.break || 10,
-      breakRatio: exam.breakRatio
-    };
-
-    const rescheduleExam = {
-      _id: exam._id,
-      subject: exam.subject,
-      examDate: exam.examDate,
-      difficulty: exam.difficulty,
-      currentKnowledge: exam.currentKnowledge,
-      priority: exam.priority,
-      availableHours: exam.availableHours,
-      breakRatio: exam.breakRatio,
-      color: exam.color,
-      syllabusTopics: [{
-        name: missedBlock.topic.replace(' (Rescheduled)', '').replace(' - Makeup', ''),
-        hours: totalMinutesToReschedule / 60
-      }]
-    };
-
-    const result = generateSchedule([rescheduleExam], config, []);
-
-    if (result.conflicts?.length > 0) {
-      await StudyBlock.findByIdAndUpdate(blockId, { missed: false });
-      return res.status(400).json({
-        msg: 'Cannot reschedule - insufficient time remaining before exam',
-        conflicts: result.conflicts
-      });
-    }
-
-    const newBlocks = result.schedule.flatMap(d => d.sessions.map(s => ({
-      userId,
-      examId: s.examId,
-      subject: s.examName,
-      topic: `${s.topicName} - Makeup`,
-      date: s.date,
-      time: s.startTime, // IST for UI
-      startTime: istToUtc(s.startTime), // UTC for cron
-      duration: s.duration,
-      isGenerated: true,
-      isBreak: s.isBreak || false,
-      type: s.type || 'Study',
-      intervalDay: s.intervalDay,
-      priority: s.priority,
-      color: s.color,
-      rescheduledFrom: missedBlock._id
-    })));
-
-    if (newBlocks.length > 0) {
-      await StudyBlock.insertMany(newBlocks);
-    }
-
-    res.json({
-      success: true,
-      msg: `Rescheduled ${missedMinutes}min across ${newBlocks.length} new blocks`,
-      missedBlock,
-      newBlocksCreated: newBlocks.length,
-      warnings: result.warnings
-    });
-  } catch (err) {
-    console.error('Dynamic reschedule error:', err);
-    res.status(500).json({ msg: 'Server Error', error: err.message });
-  }
-});
-
-// PATCH /api/schedule/:id/pending - FIX 3: New route for Pending button
-router.patch('/:id/pending', auth, async (req, res) => {
-  try {
-    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
-      return res.status(400).json({ msg: 'Invalid block ID' });
-    }
-    const block = await StudyBlock.findOneAndUpdate(
-      { _id: req.params.id, userId: req.user._id },
-      { completed: false, missed: false },
-      { new: true }
-    );
-    if (!block) return res.status(404).json({ msg: 'Block not found' });
-    res.json(block);
-  } catch (err) {
-    console.error('Pending error:', err);
-    res.status(500).json({ msg: 'Server Error' });
-  }
-});
-
-// PATCH /api/schedule/:id - Edit block including time
-router.patch('/:id', auth, async (req, res) => {
-  try {
-    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
-      return res.status(400).json({ msg: 'Invalid block ID' });
-    }
-
-    const updateData = {...req.body };
-    if (updateData.duration!== undefined) updateData.duration = parseInt(updateData.duration);
-    if (updateData.priority!== undefined) updateData.priority = parseInt(updateData.priority);
-    
-    // FIX 4: If time is updated, recalc startTime UTC for cron
-    if (updateData.time) {
-      updateData.startTime = istToUtc(updateData.time);
-    }
-
-    delete updateData._id;
-    delete updateData.userId;
-
-    const block = await StudyBlock.findOneAndUpdate(
-      { _id: req.params.id, userId: req.user._id },
-      { $set: updateData },
-      { new: true, runValidators: true }
-    );
-
-    if (!block) return res.status(404).json({ msg: 'Block not found' });
-    res.json(block);
-  } catch (err) {
-    console.error('Update error:', err);
-    res.status(500).json({ msg: 'Server Error', error: err.message });
-  }
-});
-
-// DELETE /api/schedule/:id
-router.delete('/:id', auth, async (req, res) => {
-  try {
-    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
-      return res.status(400).json({ msg: 'Invalid block ID' });
-    }
-    const block = await StudyBlock.findOneAndDelete({ _id: req.params.id, userId: req.user._id });
-    if (!block) return res.status(404).json({ msg: 'Block not found' });
-    res.json({ msg: 'Block deleted' });
-  } catch (err) {
-    console.error('Delete block error:', err);
-    res.status(500).json({ msg: 'Server Error' });
-  }
-});
-
-// DELETE /api/schedule/clear-all
-router.delete('/clear-all', auth, async (req, res) => {
-  try {
-    const result = await StudyBlock.deleteMany({ userId: req.user._id });
-    res.json({ msg: `Deleted ${result.deletedCount} study blocks` });
-  } catch (err) {
-    res.status(500).json({ msg: 'Server error', error: err.message });
-  }
-});
-
-// POST /api/schedule/log
-router.post('/log', auth, async (req, res) => {
-  try {
-    const { blockId, actualMinutes } = req.body;
-    if (!mongoose.Types.ObjectId.isValid(blockId)) {
-      return res.status(400).json({ msg: 'Invalid block ID' });
-    }
-    const block = await StudyBlock.findOneAndUpdate(
-      { _id: blockId, userId: req.user._id },
-      { actualDuration: actualMinutes, loggedAt: new Date(), completed: true },
-      { new: true }
-    );
-    if (!block) return res.status(404).json({ msg: 'Block not found' });
-    res.json(block);
   } catch (err) {
     res.status(500).json({ msg: 'Server Error' });
   }
@@ -415,14 +118,7 @@ router.get('/progress', auth, async (req, res) => {
     const userId = req.user._id;
     const subjects = await StudyBlock.aggregate([
       { $match: { userId: new mongoose.Types.ObjectId(userId), isBreak: false } },
-      {
-        $group: {
-          _id: '$subject',
-          totalPlanned: { $sum: '$duration' },
-          totalCompleted: { $sum: { $cond: ['$completed', '$duration', 0] } },
-          totalActual: { $sum: '$actualDuration' }
-        }
-      }
+      { $group: { _id: '$subject', totalPlanned: { $sum: '$duration' }, totalCompleted: { $sum: { $cond: ['$completed', '$duration', 0] } }, totalActual: { $sum: '$actualDuration' } } }
     ]);
     const progress = subjects.map(s => ({
       subject: s._id,
@@ -478,21 +174,6 @@ router.get('/affirmation', auth, async (req, res) => {
   res.json({ quote: quotes[dayIndex] });
 });
 
-// PATCH /api/schedule/user/confidence
-router.patch('/user/confidence', auth, async (req, res) => {
-  try {
-    const { subject, level } = req.body;
-    if (level < 1 || level > 10) return res.status(400).json({ msg: 'Level must be 1-10' });
-    const user = await User.findById(req.user._id);
-    if (!user.subjectConfidence) user.subjectConfidence = new Map();
-    user.subjectConfidence.set(subject, level);
-    await user.save();
-    res.json({ subject, level });
-  } catch (err) {
-    res.status(500).json({ msg: 'Server Error' });
-  }
-});
-
 // GET /api/schedule/export/pdf
 router.get('/export/pdf', auth, pdfLimiter, async (req, res) => {
   try {
@@ -500,46 +181,28 @@ router.get('/export/pdf', auth, pdfLimiter, async (req, res) => {
     const { start, end } = req.query;
     const startDate = start || new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
     const endDate = end || new Date(Date.now() + 7*86400000).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-
-    const blocks = await StudyBlock.find({
-      userId,
-      date: { $gte: startDate, $lte: endDate },
-      isBreak: false,
-      missed: false
-    }).sort({ date: 1, time: 1 });
-
-    if (blocks.length === 0) {
-      return res.status(400).json({ msg: `No study blocks found between ${startDate} and ${endDate}.` });
-    }
-
+    const blocks = await StudyBlock.find({ userId, date: { $gte: startDate, $lte: endDate }, isBreak: false, missed: false }).sort({ date: 1, time: 1 });
+    if (blocks.length === 0) return res.status(400).json({ msg: `No study blocks found between ${startDate} and ${endDate}.` });
     const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 30 });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename=study-schedule-${startDate}.pdf`);
     doc.pipe(res);
-
     doc.fontSize(20).font('Helvetica-Bold').text('Study Schedule', { align: 'center' });
     doc.fontSize(12).font('Helvetica').text(`${startDate} to ${endDate}`, { align: 'center' });
     doc.moveDown(1.5);
-
     const daysMap = {};
     const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
     blocks.forEach(b => {
       const d = new Date(b.date + 'T00:00:00');
       const dayKey = b.date;
-      if (!daysMap[dayKey]) {
-        daysMap[dayKey] = { date: d, dayName: dayNames[d.getDay()], blocks: [] };
-      }
+      if (!daysMap[dayKey]) daysMap[dayKey] = { date: d, dayName: dayNames[d.getDay()], blocks: [] };
       daysMap[dayKey].blocks.push(b);
     });
-
     const sortedDays = Object.values(daysMap).sort((a, b) => a.date - b.date);
-
     sortedDays.forEach((day, idx) => {
       if (idx > 0) doc.moveDown(1);
       doc.fontSize(14).font('Helvetica-Bold').text(`${day.dayName}, ${day.date.toLocaleDateString('en-GB')}`, { underline: true });
       doc.moveDown(0.5);
-
       day.blocks.forEach(block => {
         const color = block.color || '#3B82F6';
         doc.fontSize(10).font('Helvetica-Bold').fillColor(color).text(`${block.time} - ${block.subject}`, { continued: false });
@@ -547,7 +210,6 @@ router.get('/export/pdf', auth, pdfLimiter, async (req, res) => {
         doc.moveDown(0.3);
       });
     });
-
     doc.end();
   } catch (err) {
     console.error('PDF export error:', err);
@@ -555,7 +217,33 @@ router.get('/export/pdf', auth, pdfLimiter, async (req, res) => {
   }
 });
 
-// Google Calendar routes unchanged...
+// GET /api/schedule/export
+router.get('/export', auth, async (req, res) => {
+  try {
+    const blocks = await StudyBlock.find({ userId: req.user._id, isBreak: false }).sort({ date: 1, time: 1 });
+    res.json(blocks);
+  } catch (err) {
+    res.status(500).json({ msg: 'Server Error' });
+  }
+});
+
+// GET /api/schedule/pending
+router.get('/pending', auth, async (req, res) => {
+  try {
+    const blocks = await StudyBlock.find({
+      userId: req.user._id,
+      completed: false,
+      missed: false,
+      isBreak: false
+    }).sort({ date: 1, time: 1 });
+    res.json(blocks);
+  } catch (err) {
+    console.error('Pending route error:', err.message);
+    res.status(500).json({ msg: 'Server error' });
+  }
+});
+
+// Google Calendar routes
 router.get('/google/auth', auth, (req, res) => {
   const oauth2Client = getOAuth2Client();
   const url = oauth2Client.generateAuthUrl({
@@ -581,27 +269,78 @@ router.get('/google/callback', async (req, res) => {
   }
 });
 
+// ===== STATIC POST/DELETE ROUTES =====
+
+// POST /api/schedule/generate
+router.post('/generate', auth, async (req, res) => {
+  try {
+    const { exams, config } = req.body;
+    const userId = req.user._id;
+    if (!exams || exams.length === 0) return res.status(400).json({ msg: 'No exams provided' });
+    await StudyBlock.deleteMany({ userId, isGenerated: true });
+    const result = generateSchedule(exams, config, []);
+    if (result.conflicts?.length > 0) return res.status(400).json({ success: false, conflicts: result.conflicts, msg: 'Schedule conflicts detected' });
+    const blocksToSave = result.schedule.flatMap(day =>
+      day.sessions.map(s => ({
+        userId,
+        subject: s.examName,
+        topic: s.topicName,
+        date: s.date,
+        time: s.startTime,
+        startTime: istToUtc(s.startTime),
+        duration: s.duration,
+        isGenerated: true,
+        isBreak: s.isBreak || false,
+        type: s.type || 'Study',
+        intervalDay: s.intervalDay,
+        priority: s.priority,
+        color: s.color,
+        completed: false,
+        missed: false
+      }))
+    );
+    if (blocksToSave.length > 0) await StudyBlock.insertMany(blocksToSave);
+    res.json({ success: true, count: blocksToSave.length, warnings: result.warnings || [] });
+  } catch (err) {
+    console.error('Generate schedule error:', err);
+    res.status(500).json({ msg: 'Server error', error: err.message });
+  }
+});
+
+// POST /api/schedule/log
+router.post('/log', auth, async (req, res) => {
+  try {
+    const { blockId, actualMinutes } = req.body;
+    if (!mongoose.Types.ObjectId.isValid(blockId)) return res.status(400).json({ msg: 'Invalid block ID' });
+    const block = await StudyBlock.findOneAndUpdate(
+      { _id: blockId, userId: req.user._id },
+      { actualDuration: actualMinutes, loggedAt: new Date(), completed: true },
+      { new: true }
+    );
+    if (!block) return res.status(404).json({ msg: 'Block not found' });
+    res.json(block);
+  } catch (err) {
+    res.status(500).json({ msg: 'Server Error' });
+  }
+});
+
+// POST /api/schedule/google/sync
 router.post('/google/sync', auth, syncLimiter, async (req, res) => {
   try {
     const user = await User.findById(req.user._id);
-    if (!user.googleTokens?.refresh_token) {
-      return res.status(400).json({ msg: 'Connect Google Calendar first', needsAuth: true });
-    }
+    if (!user.googleTokens?.refresh_token) return res.status(400).json({ msg: 'Connect Google Calendar first', needsAuth: true });
     const oauth2Client = getOAuth2Client();
     oauth2Client.setCredentials(user.googleTokens);
     const { credentials } = await oauth2Client.refreshAccessToken();
     await User.findByIdAndUpdate(req.user._id, { googleTokens: credentials });
     oauth2Client.setCredentials(credentials);
     const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
-
     const blocks = await StudyBlock.find({ userId: req.user._id, isBreak: false, missed: false, completed: false });
     let synced = 0, errors = 0;
-
     for (const block of blocks) {
-      const start = new Date(`${block.date}T${block.time}:00+05:30`); // IST
+      const start = new Date(`${block.date}T${block.time}:00+05:30`);
       const end = new Date(start);
       end.setMinutes(end.getMinutes() + block.duration);
-
       const eventData = {
         summary: `${block.subject} - ${block.topic}`,
         description: `StudySync: ${block.type}\nPriority: ${block.priority}\nDuration: ${block.duration}min`,
@@ -610,22 +349,15 @@ router.post('/google/sync', auth, syncLimiter, async (req, res) => {
         colorId: block.priority === 1? '11' : block.type === 'Review'? '5' : '7',
         extendedProperties: { private: { studySyncId: block._id.toString() } }
       };
-
       try {
-        const existing = await calendar.events.list({
-          calendarId: 'primary',
-          privateExtendedProperty: `studySyncId=${block._id.toString()}`,
-          maxResults: 1
-        });
+        const existing = await calendar.events.list({ calendarId: 'primary', privateExtendedProperty: `studySyncId=${block._id.toString()}`, maxResults: 1 });
         if (existing.data.items.length > 0) {
           await calendar.events.update({ calendarId: 'primary', eventId: existing.data.items[0].id, requestBody: eventData });
         } else {
           await calendar.events.insert({ calendarId: 'primary', requestBody: eventData });
         }
         synced++;
-      } catch (e) {
-        errors++;
-      }
+      } catch (e) { errors++; }
     }
     res.json({ success: true, msg: `Synced ${synced} events${errors > 0? `, ${errors} failed` : ''}` });
   } catch (err) {
@@ -633,32 +365,153 @@ router.post('/google/sync', auth, syncLimiter, async (req, res) => {
   }
 });
 
+// DELETE /api/schedule/clear-all
+router.delete('/clear-all', auth, async (req, res) => {
+  try {
+    const result = await StudyBlock.deleteMany({ userId: req.user._id });
+    res.json({ msg: `Deleted ${result.deletedCount} study blocks` });
+  } catch (err) {
+    res.status(500).json({ msg: 'Server error', error: err.message });
+  }
+});
+
+// DELETE /api/schedule/google/disconnect
 router.delete('/google/disconnect', auth, async (req, res) => {
   await User.findByIdAndUpdate(req.user._id, { $unset: { googleTokens: 1 } });
   res.json({ msg: 'Google Calendar disconnected' });
 });
 
-router.get('/export', auth, async (req, res) => {
+// PATCH /api/schedule/user/confidence
+router.patch('/user/confidence', auth, async (req, res) => {
   try {
-    const blocks = await StudyBlock.find({ userId: req.user._id, isBreak: false }).sort({ date: 1, time: 1 });
-    res.json(blocks);
+    const { subject, level } = req.body;
+    if (level < 1 || level > 10) return res.status(400).json({ msg: 'Level must be 1-10' });
+    const user = await User.findById(req.user._id);
+    if (!user.subjectConfidence) user.subjectConfidence = new Map();
+    user.subjectConfidence.set(subject, level);
+    await user.save();
+    res.json({ subject, level });
   } catch (err) {
     res.status(500).json({ msg: 'Server Error' });
   }
 });
-// GET /api/schedule/pending
-router.get('/pending', auth, async (req, res) => {
+
+// ===== PARAMETERIZED ROUTES LAST =====
+
+// PATCH /api/schedule/:id/complete
+router.patch('/:id/complete', auth, async (req, res) => {
   try {
-    const blocks = await StudyBlock.find({ 
-      userId: req.user._id,
-      completed: false,
-      missed: false,
-      isBreak: false
-    }).sort({ date: 1, time: 1 });
-    res.json(blocks);
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(400).json({ msg: 'Invalid block ID' });
+    const block = await StudyBlock.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user._id },
+      { completed: true, missed: false },
+      { new: true }
+    );
+    if (!block) return res.status(404).json({ msg: 'Block not found' });
+    res.json(block);
   } catch (err) {
-    console.error('Pending route error:', err.message);
-    res.status(500).json({ msg: 'Server error' });
+    console.error('Complete error:', err);
+    res.status(500).json({ msg: 'Server Error' });
+  }
+});
+
+// PATCH /api/schedule/:id/missed - FULL RESCHEDULE TO PREVENT OVERLAPS
+router.patch('/:id/missed', auth, async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const blockId = req.params.id;
+    if (!mongoose.Types.ObjectId.isValid(blockId)) return res.status(400).json({ msg: 'Invalid block ID' });
+    const missedBlock = await StudyBlock.findOneAndUpdate({ _id: blockId, userId }, { missed: true, completed: false }, { new: true });
+    if (!missedBlock) return res.status(404).json({ msg: 'Block not found' });
+    if (missedBlock.isBreak) return res.status(400).json({ success: false, msg: 'Breaks cannot be marked as missed' });
+
+    const exams = await Exam.find({ userId });
+    const config = {
+      startDate: new Date(),
+      startHour: 9,
+      endHour: 18,
+      studyBlock: exams[0]?.breakRatio?.study || 50,
+      breakBlock: exams[0]?.breakRatio?.break || 10,
+      breakRatio: exams[0]?.breakRatio || { study: 50, break: 10 }
+    };
+
+    await StudyBlock.deleteMany({
+      userId,
+      date: { $gte: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) },
+      isGenerated: true,
+      completed: false
+    });
+
+    const result = generateSchedule(exams, config, []);
+    if (result.conflicts?.length > 0) {
+      await StudyBlock.findByIdAndUpdate(blockId, { missed: false });
+      return res.status(400).json({ msg: 'Cannot reschedule - insufficient time', conflicts: result.conflicts });
+    }
+
+    const newBlocks = result.schedule.flatMap(d => d.sessions.map(s => ({
+      userId, subject: s.examName, topic: s.topicName, date: s.date, time: s.startTime,
+      startTime: istToUtc(s.startTime), duration: s.duration, isGenerated: true,
+      isBreak: s.isBreak || false, type: s.type || 'Study', intervalDay: s.intervalDay,
+      priority: s.priority, color: s.color
+    })));
+    if (newBlocks.length > 0) await StudyBlock.insertMany(newBlocks);
+    res.json({ success: true, msg: `Full schedule regenerated`, newBlocksCreated: newBlocks.length });
+  } catch (err) {
+    console.error('Dynamic reschedule error:', err);
+    res.status(500).json({ msg: 'Server Error', error: err.message });
+  }
+});
+
+// PATCH /api/schedule/:id/pending
+router.patch('/:id/pending', auth, async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(400).json({ msg: 'Invalid block ID' });
+    const block = await StudyBlock.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user._id },
+      { completed: false, missed: false },
+      { new: true }
+    );
+    if (!block) return res.status(404).json({ msg: 'Block not found' });
+    res.json(block);
+  } catch (err) {
+    console.error('Pending error:', err);
+    res.status(500).json({ msg: 'Server Error' });
+  }
+});
+
+// PATCH /api/schedule/:id
+router.patch('/:id', auth, async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(400).json({ msg: 'Invalid block ID' });
+    const updateData = {...req.body };
+    if (updateData.duration!== undefined) updateData.duration = parseInt(updateData.duration);
+    if (updateData.priority!== undefined) updateData.priority = parseInt(updateData.priority);
+    if (updateData.time) updateData.startTime = istToUtc(updateData.time);
+    delete updateData._id;
+    delete updateData.userId;
+    const block = await StudyBlock.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user._id },
+      { $set: updateData },
+      { new: true, runValidators: true }
+    );
+    if (!block) return res.status(404).json({ msg: 'Block not found' });
+    res.json(block);
+  } catch (err) {
+    console.error('Update error:', err);
+    res.status(500).json({ msg: 'Server Error', error: err.message });
+  }
+});
+
+// DELETE /api/schedule/:id
+router.delete('/:id', auth, async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(400).json({ msg: 'Invalid block ID' });
+    const block = await StudyBlock.findOneAndDelete({ _id: req.params.id, userId: req.user._id });
+    if (!block) return res.status(404).json({ msg: 'Block not found' });
+    res.json({ msg: 'Block deleted' });
+  } catch (err) {
+    console.error('Delete block error:', err);
+    res.status(500).json({ msg: 'Server Error' });
   }
 });
 
