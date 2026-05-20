@@ -18,7 +18,7 @@ const normalizeTopics = (exam) => {
   }
   if (exam.totalHours > 0) {
     const topicNames = exam.syllabusTopics?.length > 0
-  ? exam.syllabusTopics.filter(t => typeof t === 'string' && t.trim())
+ ? exam.syllabusTopics.filter(t => typeof t === 'string' && t.trim())
       : ['General'];
     const hoursPerTopic = exam.totalHours / topicNames.length;
     return topicNames.map(name => ({ name: name.trim(), hours: hoursPerTopic }));
@@ -35,13 +35,31 @@ const toISTDateString = (date) => {
 
 function addMinutes(time, mins) {
   const [h, m] = time.split(':').map(Number);
-  const totalMins = h * 60 + m + Math.round(mins); // ROUND FIX
+  const totalMins = h * 60 + m + Math.round(mins);
   const newH = Math.floor(totalMins / 60) % 24;
   const newM = totalMins % 60;
   return `${String(newH).padStart(2, '0')}:${String(newM).padStart(2, '0')}`;
 }
 
-const generateSchedule = (exams, config, missedBlocks = []) => {
+function timeToMinutes(time) {
+  const [h, m] = time.split(':').map(Number);
+  return h * 60 + m;
+}
+
+// CRITICAL FIX: Check if time slot overlaps with existing blocks
+const isTimeOccupied = (date, startTime, duration, existingBlocks) => {
+  const startMin = timeToMinutes(startTime);
+  const endMin = startMin + duration;
+
+  return existingBlocks.some(b => {
+    if (b.date!== date) return false;
+    const bStart = timeToMinutes(b.time);
+    const bEnd = bStart + b.duration;
+    return startMin < bEnd && endMin > bStart; // overlap
+  });
+};
+
+const generateSchedule = (exams, config, existingBlocks = []) => {
   const result = { schedule: [], conflicts: [], warnings: [], metadata: {} };
 
   exams.forEach(exam => {
@@ -76,6 +94,20 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
   }
 
   const availableDays = Array.from(availableDaysMap.values()).sort((a, b) => new Date(a.date) - new Date(b.date));
+
+  // FIX: Add existing blocks to each day so we don't double-book
+  existingBlocks.forEach(block => {
+    const day = availableDaysMap.get(block.date);
+    if (day) {
+      const examKey = block.examId || block.subject;
+      const examCap = Object.values(day.examCaps).find(ec => ec.subject === block.subject);
+      if (examCap) {
+        examCap.used += block.duration / 60;
+        day.usedHours += block.duration / 60;
+      }
+    }
+  });
+
   const topics = [];
   let totalRequiredHours = 0;
 
@@ -109,14 +141,6 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
     return result;
   }
 
-  missedBlocks.forEach(missed => {
-    const topic = topics.find(t => t.topicName === missed.topic && t.examName === missed.subject);
-    if (topic) {
-      topic.hoursRemaining += missed.duration / 60;
-      totalRequiredHours += missed.duration / 60;
-    }
-  });
-
   const sortedTopics = topics.filter(t => t.hoursRemaining > 0).sort((a, b) => {
     if (a.userPriority!== b.userPriority) return a.userPriority - b.userPriority;
     if (a.daysUntilExam!== b.daysUntilExam) return a.daysUntilExam - b.daysUntilExam;
@@ -145,12 +169,18 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
         if (currentMinutes + studyMinutes > config.endHour * 60) break;
 
         const actualStudyHours = Math.min(blockHours, hoursToSchedule, examDayRemaining);
-        const actualStudyMinutes = Math.round(actualStudyHours * 60); // ROUND FIX
+        const actualStudyMinutes = Math.round(actualStudyHours * 60);
         if (actualStudyMinutes < MIN_BLOCK_HOURS * 60) break;
 
         const startHour = Math.floor(currentMinutes / 60);
         const startMin = Math.round(currentMinutes % 60);
         const startTime = `${String(startHour).padStart(2, '0')}:${String(startMin).padStart(2, '0')}`;
+
+        // FIX: Skip if this time slot is occupied by existing missed/completed block
+        if (isTimeOccupied(day.date, startTime, actualStudyMinutes, existingBlocks)) {
+          currentMinutes += 10; // Skip 10 min and try next slot
+          continue;
+        }
 
         day.sessions.push({ type: 'Study', examId: topic.examId, examName: topic.examName, color: topic.color, topicName: topic.topicName, hours: actualStudyHours, priority: topic.userPriority, date: day.date, startTime, duration: actualStudyMinutes, isBreak: false, isGenerated: true });
 
@@ -166,13 +196,18 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
           const breakStartMin = Math.round(currentMinutes % 60);
           const breakStartTime = `${String(breakStartHour).padStart(2, '0')}:${String(breakStartMin).padStart(2, '0')}`;
 
-          day.sessions.push({ type: 'Break', examId: topic.examId, examName: topic.examName, color: '#10B981', topicName: 'Break', hours: breakHours, date: day.date, startTime: breakStartTime, duration: breakMinutes, isBreak: true, isGenerated: true });
+          // FIX: Check if break time is occupied
+          if (!isTimeOccupied(day.date, breakStartTime, breakMinutes, existingBlocks)) {
+            day.sessions.push({ type: 'Break', examId: topic.examId, examName: topic.examName, color: '#10B981', topicName: 'Break', hours: breakHours, date: day.date, startTime: breakStartTime, duration: breakMinutes, isBreak: true, isGenerated: true });
 
-          const actualBreakHours = Math.min(breakHours, examDayRemaining);
-          examCap.used += actualBreakHours;
-          day.usedHours += actualBreakHours;
-          examDayRemaining -= actualBreakHours;
-          currentMinutes += breakMinutes; // CRITICAL FIX: Update time after break
+            const actualBreakHours = Math.min(breakHours, examDayRemaining);
+            examCap.used += actualBreakHours;
+            day.usedHours += actualBreakHours;
+            examDayRemaining -= actualBreakHours;
+            currentMinutes += breakMinutes;
+          } else {
+            currentMinutes += breakMinutes; // Still advance time even if we skip the break
+          }
         } else {
           break;
         }
@@ -183,7 +218,7 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
     }
   }
 
-  // SPACED REPETITION
+  // SPACED REPETITION - also check for occupied times
   availableDays.forEach(day => {
     day.sessions.filter(s => s.type === 'Study').forEach(session => {
       const examCap = day.examCaps[session.examId];
@@ -209,9 +244,13 @@ const generateSchedule = (exams, config, missedBlocks = []) => {
             const startHour = Math.floor(currentMinutes / 60);
             const startMin = Math.round(currentMinutes % 60);
             const startTime = `${String(startHour).padStart(2, '0')}:${String(startMin).padStart(2, '0')}`;
-            reviewDay.sessions.push({ type: 'Review', examId: session.examId, examName: session.examName, color: session.color, topicName: session.topicName, hours: reviewHours, intervalDay: interval, date: reviewDateStr, startTime, duration: reviewMinutes, isBreak: false, isGenerated: true });
-            reviewExamCap.used += reviewHours;
-            reviewDay.usedHours += reviewHours;
+
+            // FIX: Check if review time is occupied
+            if (!isTimeOccupied(reviewDateStr, startTime, reviewMinutes, existingBlocks)) {
+              reviewDay.sessions.push({ type: 'Review', examId: session.examId, examName: session.examName, color: session.color, topicName: session.topicName, hours: reviewHours, intervalDay: interval, date: reviewDateStr, startTime, duration: reviewMinutes, isBreak: false, isGenerated: true });
+              reviewExamCap.used += reviewHours;
+              reviewDay.usedHours += reviewHours;
+            }
           }
         }
       });

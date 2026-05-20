@@ -415,12 +415,13 @@ router.patch('/:id/complete', auth, async (req, res) => {
   }
 });
 
-// PATCH /api/schedule/:id/missed - FULL RESCHEDULE TO PREVENT OVERLAPS
+// PATCH /api/schedule/:id/missed - FIXED TO PREVENT DUPLICATES
 router.patch('/:id/missed', auth, async (req, res) => {
   try {
     const userId = req.user._id;
     const blockId = req.params.id;
     if (!mongoose.Types.ObjectId.isValid(blockId)) return res.status(400).json({ msg: 'Invalid block ID' });
+    
     const missedBlock = await StudyBlock.findOneAndUpdate({ _id: blockId, userId }, { missed: true, completed: false }, { new: true });
     if (!missedBlock) return res.status(404).json({ msg: 'Block not found' });
     if (missedBlock.isBreak) return res.status(400).json({ success: false, msg: 'Breaks cannot be marked as missed' });
@@ -435,16 +436,29 @@ router.patch('/:id/missed', auth, async (req, res) => {
       breakRatio: exams[0]?.breakRatio || { study: 50, break: 10 }
     };
 
-    await StudyBlock.deleteMany({
+    // FIX 1: Get all blocks that should stay, including the one we just missed
+    const existingBlocks = await StudyBlock.find({
       userId,
-      _id: { $ne: blockId }, // <-- THIS LINE IS THE FIX
-      subject: missedBlock.subject,
       date: { $gte: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) },
-      isGenerated: true,
-      completed: false
+      $or: [
+        { isGenerated: false }, // Keep manual blocks
+        { completed: true }, // Keep completed blocks 
+        { missed: true } // Keep missed blocks so we don't double-book
+      ]
     });
 
-    const result = generateSchedule(exams, config, []);
+    // FIX 2: Only delete future GENERATED blocks that aren't completed or missed
+    await StudyBlock.deleteMany({
+      userId,
+      date: { $gte: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) },
+      isGenerated: true,
+      completed: false,
+      missed: false
+    });
+
+    // FIX 3: Pass existingBlocks to scheduler so it avoids those times
+    const result = generateSchedule(exams, config, existingBlocks);
+    
     if (result.conflicts?.length > 0) {
       await StudyBlock.findByIdAndUpdate(blockId, { missed: false });
       return res.status(400).json({ msg: 'Cannot reschedule - insufficient time', conflicts: result.conflicts });
@@ -464,7 +478,7 @@ router.patch('/:id/missed', auth, async (req, res) => {
   }
 });
 
-
+// PATCH /api/schedule/:id/pending
 router.patch('/:id/pending', auth, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(400).json({ msg: 'Invalid block ID' });
