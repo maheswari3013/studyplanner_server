@@ -1,6 +1,7 @@
-const mongoose = require('mongoose')
+const mongoose = require('mongoose');
+
 const ExamSchema = new mongoose.Schema({
-  userId: {
+  user: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
@@ -21,7 +22,7 @@ const ExamSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
-  color: {  // ← Keep only this one, delete the duplicate below
+  color: {
     type: String,
     default: '#3B82F6'
   },
@@ -41,15 +42,6 @@ const ExamSchema = new mongoose.Schema({
     type: Number,
     default: 3
   },
-  // DELETE THIS DUPLICATE ↓
-  // color: {
-  //   type: String,
-  //   default: '#3B82F6'
-  // },
-  rescheduledFrom: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'StudyBlock'
-  },
   totalHours: {
     type: Number,
     required: false,
@@ -57,7 +49,7 @@ const ExamSchema = new mongoose.Schema({
   },
   syllabusTopics: [{
     name: { type: String, required: true },
-    hours: { type: Number, required: true }
+    hours: { type: Number, required: false, default: 1 }
   }],
   availableHours: {
     mon: { type: Number, default: 4 },
@@ -69,8 +61,8 @@ const ExamSchema = new mongoose.Schema({
     sun: { type: Number, default: 6 }
   },
   breakRatio: {
-    study: { type: Number, default: 25 },
-    break: { type: Number, default: 5 }
+    study: { type: Number, default: 50 },
+    break: { type: Number, default: 10 }
   },
   totalScheduledHours: {
     type: Number,
@@ -83,6 +75,10 @@ const ExamSchema = new mongoose.Schema({
   status: {
     type: String,
     default: 'Pending'
+  },
+  rescheduledFrom: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'StudyBlock'
   },
   createdAt: {
     type: Date,

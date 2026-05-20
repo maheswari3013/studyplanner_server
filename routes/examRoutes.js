@@ -57,57 +57,17 @@ router.post('/', auth, async (req, res) => {
 // PUT /api/exams/:id - Update exam
 router.put('/:id', auth, async (req, res) => {
   try {
-    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
-      return res.status(400).json({ msg: 'Invalid exam ID' });
-    }
-
-    const {
-      subject,
-      examDate,
-      time,
-      location,
-      difficulty,
-      currentKnowledge,
-      priority,
-      syllabusTopics,
-      availableHours,
-      breakRatio
-    } = req.body;
-
-    // Validate topics
-    if (Array.isArray(syllabusTopics)) {
-      for (const t of syllabusTopics) {
-        if (!t.name || typeof t.name !== 'string' || !t.name.trim()) {
-          return res.status(400).json({ msg: 'Each topic needs a valid name' });
-        }
-        if (!t.hours || t.hours <= 0) {
-          return res.status(400).json({ msg: `Topic "${t.name}" needs hours > 0` });
-        }
-      }
-    }
-
-    const exam = await Exam.findOneAndUpdate(
-      { _id: req.params.id, userId: req.user._id },
-      {
-        subject,
-        examDate,
-        time,
-        location,
-        difficulty,
-        currentKnowledge,
-        priority,
-        syllabusTopics: syllabusTopics || [],
-        availableHours,
-        breakRatio
-      },
-      { new: true, runValidators: true }
-    );
-
+    const exam = await Exam.findOne({ _id: req.params.id, user: req.user.id });
     if (!exam) return res.status(404).json({ msg: 'Exam not found' });
+
+    const updates = req.body;
+    Object.assign(exam, updates);
+    
+    await exam.save();
     res.json(exam);
   } catch (err) {
-    console.error('Update exam error:', err.message);
-    res.status(500).json({ msg: err.message });
+    console.error(err);
+    res.status(500).json({ msg: 'Server error' });
   }
 });
 
