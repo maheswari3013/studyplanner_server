@@ -19,8 +19,6 @@ router.get('/', auth, async (req, res) => {
 // POST /api/exams - Add new exam with validation
 router.post('/', auth, async (req, res) => {
   try {
-    console.log('Incoming exam data:', req.body);
-    
     const {
       subject,
       examDate,
@@ -29,37 +27,10 @@ router.post('/', auth, async (req, res) => {
       difficulty,
       currentKnowledge,
       priority,
-      totalHours,
       syllabusTopics,
       availableHours,
-      breakRatio,
-      color
+      breakRatio
     } = req.body;
-
-    // VALIDATION: Can't use both totalHours AND per-topic hours
-    const hasTopicHours = Array.isArray(syllabusTopics) && 
-      syllabusTopics.some(t => typeof t === 'object' && t.hours);
-    
-    if (totalHours && hasTopicHours) {
-      return res.status(400).json({ 
-        msg: 'Use either totalHours OR per-topic hours, not both' 
-      });
-    }
-
-    if (hasTopicHours) {
-      for (const t of syllabusTopics) {
-        if (!t.name || typeof t.name !== 'string' || !t.name.trim()) {
-          return res.status(400).json({ msg: 'Each topic needs a valid name' });
-        }
-        if (!t.hours || t.hours <= 0) {
-          return res.status(400).json({ msg: `Topic "${t.name}" needs hours > 0` });
-        }
-      }
-    }
-
-    if (totalHours && totalHours <= 0) {
-      return res.status(400).json({ msg: 'totalHours must be > 0' });
-    }
 
     const exam = new Exam({
       userId: req.user._id,
@@ -67,20 +38,15 @@ router.post('/', auth, async (req, res) => {
       examDate,
       time: time || "09:00",
       location: location || '',
-      color: color || '#3B82F6',
       difficulty: difficulty || 3,
       currentKnowledge: currentKnowledge || 3,
       priority: priority || 3,
-      totalHours: totalHours || undefined,
       syllabusTopics: syllabusTopics || [],
-      availableHours: availableHours || {
-        sun: 4, mon: 4, tue: 4, wed: 4, thu: 4, fri: 4, sat: 6
-      },
-      breakRatio: breakRatio || { study: 25, break: 5 }
+      availableHours: availableHours || defaultAvailableHours,
+      breakRatio: breakRatio || { study: 50, break: 10 }
     });
 
     await exam.save();
-    console.log('Saved exam:', exam);
     res.json(exam);
   } catch (err) {
     console.error('Add exam error:', err.message);
@@ -103,23 +69,13 @@ router.put('/:id', auth, async (req, res) => {
       difficulty,
       currentKnowledge,
       priority,
-      totalHours,
       syllabusTopics,
       availableHours,
-      breakRatio,
-      color
+      breakRatio
     } = req.body;
 
-    const hasTopicHours = Array.isArray(syllabusTopics) && 
-      syllabusTopics.some(t => typeof t === 'object' && t.hours);
-    
-    if (totalHours && hasTopicHours) {
-      return res.status(400).json({ 
-        msg: 'Use either totalHours OR per-topic hours, not both' 
-      });
-    }
-
-    if (hasTopicHours) {
+    // Validate topics
+    if (Array.isArray(syllabusTopics)) {
       for (const t of syllabusTopics) {
         if (!t.name || typeof t.name !== 'string' || !t.name.trim()) {
           return res.status(400).json({ msg: 'Each topic needs a valid name' });
@@ -137,11 +93,9 @@ router.put('/:id', auth, async (req, res) => {
         examDate,
         time,
         location,
-        color,
         difficulty,
         currentKnowledge,
         priority,
-        totalHours: totalHours || undefined,
         syllabusTopics: syllabusTopics || [],
         availableHours,
         breakRatio
