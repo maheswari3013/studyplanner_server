@@ -462,7 +462,7 @@ router.patch('/:id/missed', auth, async (req, res) => {
   }
 });
 
-// PATCH /api/schedule/:id/pending
+// This MUST be above router.patch('/:id', ...)
 router.patch('/:id/pending', auth, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(400).json({ msg: 'Invalid block ID' });
