@@ -21,7 +21,7 @@ const ExamSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
-  color: { // ← ADD THIS FOR SRS Color Customization
+  color: {  // ← Keep only this one, delete the duplicate below
     type: String,
     default: '#3B82F6'
   },
@@ -37,24 +37,28 @@ const ExamSchema = new mongoose.Schema({
     max: 5,
     default: 3
   },
-  priority: Number,
-color: {
-  type: String,
-  default: '#3B82F6'
-},
-rescheduledFrom: {
-  type: mongoose.Schema.Types.ObjectId,
-  ref: 'StudyBlock'
-},
+  priority: {
+    type: Number,
+    default: 3
+  },
+  // DELETE THIS DUPLICATE ↓
+  // color: {
+  //   type: String,
+  //   default: '#3B82F6'
+  // },
+  rescheduledFrom: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'StudyBlock'
+  },
   totalHours: {
     type: Number,
     required: false,
     min: 0
   },
-  syllabusTopics: {
-    type: [mongoose.Schema.Types.Mixed],
-    default: []
-  },
+  syllabusTopics: [{
+    name: { type: String, required: true },
+    hours: { type: Number, required: true }
+  }],
   availableHours: {
     mon: { type: Number, default: 4 },
     tue: { type: Number, default: 4 },
@@ -65,8 +69,8 @@ rescheduledFrom: {
     sun: { type: Number, default: 6 }
   },
   breakRatio: {
-    study: { type: Number, default: 50 },
-    break: { type: Number, default: 10 }
+    study: { type: Number, default: 25 },
+    break: { type: Number, default: 5 }
   },
   totalScheduledHours: {
     type: Number,

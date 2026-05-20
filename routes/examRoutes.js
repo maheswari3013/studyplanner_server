@@ -19,6 +19,8 @@ router.get('/', auth, async (req, res) => {
 // POST /api/exams - Add new exam with validation
 router.post('/', auth, async (req, res) => {
   try {
+    console.log('Incoming exam data:', req.body);
+    
     const {
       subject,
       examDate,
@@ -30,7 +32,8 @@ router.post('/', auth, async (req, res) => {
       totalHours,
       syllabusTopics,
       availableHours,
-      breakRatio
+      breakRatio,
+      color
     } = req.body;
 
     // VALIDATION: Can't use both totalHours AND per-topic hours
@@ -62,18 +65,22 @@ router.post('/', auth, async (req, res) => {
       userId: req.user._id,
       subject,
       examDate,
-      time,
-      location,
-      difficulty,
-      currentKnowledge,
-      priority,
+      time: time || "09:00",
+      location: location || '',
+      color: color || '#3B82F6',
+      difficulty: difficulty || 3,
+      currentKnowledge: currentKnowledge || 3,
+      priority: priority || 3,
       totalHours: totalHours || undefined,
       syllabusTopics: syllabusTopics || [],
-      availableHours,
-      breakRatio
+      availableHours: availableHours || {
+        sun: 4, mon: 4, tue: 4, wed: 4, thu: 4, fri: 4, sat: 6
+      },
+      breakRatio: breakRatio || { study: 25, break: 5 }
     });
 
     await exam.save();
+    console.log('Saved exam:', exam);
     res.json(exam);
   } catch (err) {
     console.error('Add exam error:', err.message);
@@ -99,7 +106,8 @@ router.put('/:id', auth, async (req, res) => {
       totalHours,
       syllabusTopics,
       availableHours,
-      breakRatio
+      breakRatio,
+      color
     } = req.body;
 
     const hasTopicHours = Array.isArray(syllabusTopics) && 
@@ -129,6 +137,7 @@ router.put('/:id', auth, async (req, res) => {
         examDate,
         time,
         location,
+        color,
         difficulty,
         currentKnowledge,
         priority,
@@ -149,7 +158,7 @@ router.put('/:id', auth, async (req, res) => {
 });
 
 // DELETE /api/exams/:id - Delete exam + its study blocks
-router.delete('/:id', auth, async (req, res, next) => {
+router.delete('/:id', auth, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(400).json({ msg: 'Invalid exam ID' });
@@ -161,13 +170,12 @@ router.delete('/:id', auth, async (req, res, next) => {
       return res.status(404).json({ msg: 'Exam not found' });
     }
 
-    // Delete all study blocks for this exam first - using subject since examId isn't always set
+    // Delete all study blocks for this exam
     await StudyBlock.deleteMany({ 
       userId: req.user._id, 
       subject: exam.subject 
     });
 
-    // Then delete the exam
     await Exam.findByIdAndDelete(req.params.id);
     
     res.json({ msg: 'Exam and related study blocks deleted' });
