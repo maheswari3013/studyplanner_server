@@ -18,7 +18,7 @@ const normalizeTopics = (exam) => {
   }
   if (exam.totalHours > 0) {
     const topicNames = exam.syllabusTopics?.length > 0
-   ? exam.syllabusTopics.filter(t => typeof t === 'string' && t.trim())
+     ? exam.syllabusTopics.filter(t => typeof t === 'string' && t.trim())
       : ['General'];
     const hoursPerTopic = exam.totalHours / topicNames.length;
     return topicNames.map(name => ({ name: name.trim(), hours: hoursPerTopic }));
@@ -57,16 +57,18 @@ function generateSchedule(exams, config, existingBlocks = []) {
   const startDateObj = new Date(startDateStr + 'T00:00:00');
 
   const examDates = exams.map(e => new Date(e.examDate || e.date)).filter(d =>!isNaN(d));
-  const lastExamDate = examDates.length > 0? new Date(Math.max(...examDates)) : new Date(startDateObj);
-  lastExamDate.setDate(lastExamDate.getDate() - 1); // Stop day before last exam
 
-  // FIX 1: Calculate daysToSchedule properly - from startDate to day before earliest exam
-  const earliestExam = examDates.length > 0? new Date(Math.min(...examDates)) : lastExamDate;
-  const daysToSchedule = Math.max(1, Math.ceil((earliestExam - startDateObj) / (1000 * 60 * 60 * 24)));
+  // FIX: Don't subtract 1 day. Schedule up to exam date.
+  const lastExamDate = examDates.length > 0? new Date(Math.max(...examDates)) : new Date(startDateObj);
+
+  // FIX: Calculate days from start to last exam, inclusive
+  const daysToSchedule = Math.max(1, Math.ceil((lastExamDate - startDateObj) / (1000 * 60 * 60 * 24)) + 1);
 
   const availableDaysMap = new Map();
   let currentDate = new Date(startDateObj);
   let dayCount = 0;
+
+  console.log(`[Scheduler] Start: ${startDateStr}, End: ${toISTDateString(lastExamDate)}, Days: ${daysToSchedule}`);
 
   while (currentDate <= lastExamDate && dayCount < daysToSchedule) {
     const dateStr = toISTDateString(currentDate);
@@ -81,8 +83,10 @@ function generateSchedule(exams, config, existingBlocks = []) {
     };
 
     exams.forEach(exam => {
-      // FIX 2: Actually use exam.availableHours from form
+      // FIX: Use exam.availableHours correctly with lowercase day names
       const examHours = exam.availableHours?.[dayName];
+      console.log(`[Scheduler] ${dateStr} ${dayName}: exam ${exam.subject} has ${examHours}h`);
+
       if (examHours > 0) {
         const examKey = exam._id? exam._id.toString() : exam.subject;
         dayData.examCaps[examKey] = {
@@ -102,6 +106,8 @@ function generateSchedule(exams, config, existingBlocks = []) {
     }
     currentDate.setDate(currentDate.getDate() + 1);
   }
+
+  console.log(`[Scheduler] Available days with hours: ${availableDaysMap.size}`);
 
   const availableDays = Array.from(availableDaysMap.values());
 
@@ -125,12 +131,25 @@ function generateSchedule(exams, config, existingBlocks = []) {
     const topicsList = normalizeTopics(exam);
     const examId = exam._id? exam._id.toString() : exam.subject;
     const examDate = new Date(exam.examDate || exam.date);
+
+    // FIX: Count days before exam, not including exam day
     const daysBeforeExam = availableDays.filter(d => new Date(d.date) < examDate && d.examCaps[examId]).length;
-    const maxDailyHours = Math.max(...Object.values(exam.availableHours || {}), endHour - startHour);
+
+    // FIX: Handle empty availableHours gracefully
+    const availableHoursValues = Object.values(exam.availableHours || {});
+    const maxDailyHours = availableHoursValues.length > 0
+     ? Math.max(...availableHoursValues)
+      : (endHour - startHour);
+
     const maxPossibleHours = daysBeforeExam * maxDailyHours;
+
+    console.log(`[Scheduler] Exam ${exam.subject}: daysBeforeExam=${daysBeforeExam}, maxDailyHours=${maxDailyHours}, maxPossible=${maxPossibleHours}`);
 
     topicsList.forEach(topic => {
       const adjustedHoursPerTopic = topic.hours * difficultyMultiplier * knowledgeMultiplier;
+
+      console.log(`[Scheduler] Topic ${topic.name}: base=${topic.hours}h, adjusted=${adjustedHoursPerTopic.toFixed(1)}h`);
+
       if (adjustedHoursPerTopic > maxPossibleHours && maxPossibleHours > 0) {
         result.conflicts.push({
           type: 'TOPIC_IMPOSSIBLE',
@@ -161,6 +180,9 @@ function generateSchedule(exams, config, existingBlocks = []) {
   });
 
   const totalAvailableHours = availableDays.reduce((sum, day) => sum + day.totalAvailable, 0);
+
+  console.log(`[Scheduler] Total required: ${totalRequiredHours.toFixed(1)}h, Available: ${totalAvailableHours.toFixed(1)}h`);
+
   if (totalRequiredHours > totalAvailableHours) {
     const deficit = totalRequiredHours - totalAvailableHours;
     result.conflicts.push({
@@ -185,11 +207,15 @@ function generateSchedule(exams, config, existingBlocks = []) {
 
   for (const topic of sortedTopics) {
     let hoursToSchedule = topic.hoursRemaining;
+    console.log(`[Scheduler] Scheduling topic: ${topic.topicName}, hours: ${hoursToSchedule.toFixed(1)}`);
+
     for (const day of availableDays) {
       if (hoursToSchedule <= 0) break;
       if (new Date(day.date) >= new Date(topic.examDate)) continue;
+
       const examCap = day.examCaps[topic.examId];
       if (!examCap) continue;
+
       let examDayRemaining = examCap.available - examCap.used;
       if (examDayRemaining < MIN_BLOCK_HOURS) continue;
 
@@ -263,7 +289,9 @@ function generateSchedule(exams, config, existingBlocks = []) {
         }
       }
     }
+
     if (hoursToSchedule > 0.1) {
+      console.log(`[Scheduler] Warning: ${topic.topicName} has ${hoursToSchedule.toFixed(1)}h unscheduled`);
       result.warnings.push({
         topic: `${topic.examName} - ${topic.topicName}`,
         message: `Could not schedule ${hoursToSchedule.toFixed(1)}h.`,
@@ -277,9 +305,13 @@ function generateSchedule(exams, config, existingBlocks = []) {
     sessions: day.sessions.sort((a, b) => a.startTime.localeCompare(b.startTime))
   }));
 
+  const totalBlocks = result.schedule.reduce((sum, day) => sum + day.sessions.length, 0);
+  console.log(`[Scheduler] Generated ${totalBlocks} blocks total`);
+
   result.metadata = {
     totalRequiredHours,
     totalAvailableHours,
+    totalBlocksGenerated: totalBlocks,
     status: result.conflicts.length > 0? 'HAS_CONFLICTS' : 'OK'
   };
 
