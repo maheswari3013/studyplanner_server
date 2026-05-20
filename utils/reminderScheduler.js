@@ -117,8 +117,8 @@ for (const userId of userIds) {
     startDate: new Date(),
     startHour: Math.min(22, currentHourIST + 1), // Start 1 hour from now
     endHour: 23,
-    studyBlock: 25,
-    breakBlock: 5
+    studyBlock: 50,
+    breakBlock: 10
   };
   
   console.log(` Regenerating for user ${userId} starting ${config.startHour}:00`);
