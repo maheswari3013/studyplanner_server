@@ -437,6 +437,8 @@ router.patch('/:id/missed', auth, async (req, res) => {
 
     await StudyBlock.deleteMany({
       userId,
+      _id: { $ne: blockId }, // <-- THIS LINE IS THE FIX
+      subject: missedBlock.subject,
       date: { $gte: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) },
       isGenerated: true,
       completed: false
@@ -462,7 +464,7 @@ router.patch('/:id/missed', auth, async (req, res) => {
   }
 });
 
-// This MUST be above router.patch('/:id', ...)
+
 router.patch('/:id/pending', auth, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(400).json({ msg: 'Invalid block ID' });
