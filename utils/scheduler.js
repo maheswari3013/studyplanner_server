@@ -1,5 +1,5 @@
 const SPACED_INTERVALS = [1, 3, 7, 14];
-const MIN_BLOCK_HOURS = 0.5;
+const MIN_BLOCK_HOURS = 0.4;
 const DAY_NAMES = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 const DEFAULT_BASE_HOURS_PER_TOPIC = 10;
 
@@ -212,7 +212,7 @@ function generateSchedule(exams, config, existingBlocks = []) {
 
     for (const day of availableDays) {
       if (hoursToSchedule <= 0) break;
-      if (new Date(day.date) >= new Date(topic.examDate)) continue;
+      if (new Date(day.date) > new Date(topic.examDate)) continue;
 
       const examCap = day.examCaps[topic.examId];
       if (!examCap) continue;
