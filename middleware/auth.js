@@ -10,12 +10,12 @@ module.exports = async function(req, res, next) {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const userId = decoded.id || decoded.user?.id; 
+    const userId = decoded.id || decoded.user?.id;
     if (!userId) {
       return res.status(401).json({ msg: 'Invalid token payload' });
     }
     
-    req.user = { _id: userId };
+    req.user = { id: userId };
     
     await User.findByIdAndUpdate(userId, { lastActive: new Date() });
     next();

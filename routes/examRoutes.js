@@ -8,7 +8,7 @@ const StudyBlock = require('../models/StudyBlock');
 // GET /api/exams - Get all exams for logged in user
 router.get('/', auth, async (req, res) => {
   try {
-    const exams = await Exam.find({ userId: req.user._id }).sort({ examDate: 1 });
+    const exams = await Exam.find({ user: req.user.id }).sort({ examDate: 1 });
     res.json(exams);
   } catch (err) {
     console.error('Get exams error:', err.message);
@@ -16,57 +16,35 @@ router.get('/', auth, async (req, res) => {
   }
 });
 
-// POST /api/exams - Add new exam with validation
 router.post('/', auth, async (req, res) => {
   try {
-    const {
-      subject,
-      examDate,
-      time,
-      location,
-      difficulty,
-      currentKnowledge,
-      priority,
-      syllabusTopics,
-      availableHours,
-      breakRatio
-    } = req.body;
-
     const exam = new Exam({
-      userId: req.user._id,
-      subject,
-      examDate,
-      time: time || "09:00",
-      location: location || '',
-      difficulty: difficulty || 3,
-      currentKnowledge: currentKnowledge || 3,
-      priority: priority || 3,
-      syllabusTopics: syllabusTopics || [],
-      availableHours: availableHours || defaultAvailableHours,
-      breakRatio: breakRatio || { study: 50, break: 10 }
+    ...req.body,
+      user: req.user.id
     });
-
     await exam.save();
     res.json(exam);
   } catch (err) {
-    console.error('Add exam error:', err.message);
-    res.status(500).json({ msg: err.message });
+    console.error('Create exam error:', err.message);
+    res.status(400).json({ msg: err.message });
   }
 });
 
 // PUT /api/exams/:id - Update exam
 router.put('/:id', auth, async (req, res) => {
   try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ msg: 'Invalid exam ID' });
+    }
+
     const exam = await Exam.findOne({ _id: req.params.id, user: req.user.id });
     if (!exam) return res.status(404).json({ msg: 'Exam not found' });
 
-    const updates = req.body;
-    Object.assign(exam, updates);
-    
+    Object.assign(exam, req.body);
     await exam.save();
     res.json(exam);
   } catch (err) {
-    console.error(err);
+    console.error('Update exam error:', err.message);
     res.status(500).json({ msg: 'Server error' });
   }
 });
@@ -78,7 +56,7 @@ router.delete('/:id', auth, async (req, res) => {
       return res.status(400).json({ msg: 'Invalid exam ID' });
     }
 
-    const exam = await Exam.findOne({ _id: req.params.id, userId: req.user._id });
+    const exam = await Exam.findOne({ _id: req.params.id, user: req.user.id });
     
     if (!exam) {
       return res.status(404).json({ msg: 'Exam not found' });
@@ -86,7 +64,7 @@ router.delete('/:id', auth, async (req, res) => {
 
     // Delete all study blocks for this exam
     await StudyBlock.deleteMany({ 
-      userId: req.user._id, 
+      user: req.user.id, 
       subject: exam.subject 
     });
 
