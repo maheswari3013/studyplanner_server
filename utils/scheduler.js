@@ -50,6 +50,7 @@ const isTimeOccupied = (date, startTime, duration, existingBlocks) => {
 };
 
 function generateSchedule(exams, config, existingBlocks = []) {
+  console.log('EXAM PAYLOAD:', JSON.stringify(exams[0].availableHours));
   const { startDate, startHour, endHour, studyBlock, breakBlock } = config;
   const result = { schedule: [], conflicts: [], warnings: [], metadata: {} };
 
