@@ -278,7 +278,7 @@ router.get('/google/callback', async (req, res) => {
 
 // ===== STATIC POST/DELETE ROUTES =====
 
-/router.post('/generate', auth, async (req, res) => {
+router.post('/generate', auth, async (req, res) => {
   try {
     const { exams } = req.body;
     const userId = req.user._id;
