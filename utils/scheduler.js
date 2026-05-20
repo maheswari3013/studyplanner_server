@@ -17,7 +17,7 @@ const normalizeTopics = (exam) => {
       missedHours: t.missedHours || 0 // ADD THIS
     }));
   }
-  if (exam.totalHours > 0) {
+  if (exam.totalHours >= 0) {
     const topicNames = exam.syllabusTopics?.length > 0
     ? exam.syllabusTopics.filter(t => typeof t === 'string' && t.trim())
       : ['General'];

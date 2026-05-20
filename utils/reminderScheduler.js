@@ -100,29 +100,49 @@ cron.schedule('* * * * *', async () => {
       }
 
       // Regenerate for all affected users
-      const userIds = [...new Set(actuallyOverdue.map(b => b.user.toString()))]; // FIX: user not userId
-      for (const userId of userIds) {
-        const exams = await Exam.find({ user: userId }); // FIX: user not userId
-        const allBlocks = await StudyBlock.find({ user: userId }); // FIX: user not userId
-        const config = {
-          startDate: new Date(),
-          startHour: 15, // Start from now
-          endHour: 23,
-          studyBlock: 25,
-          breakBlock: 5
-        };
-        const result = generateSchedule(exams, config, allBlocks);
-        const newBlocks = result.schedule.flatMap(d => d.sessions.map(s => ({
-          user: userId, subject: s.examName, topic: s.topicName, date: s.date,
-          time: s.startTime, startTime: istToUtc(s.startTime), duration: s.duration,
-          isGenerated: true, isBreak: s.isBreak || false, type: s.type || 'Study',
-          color: s.color, status: 'scheduled', priority: s.priority
-        })));
-        if (newBlocks.length > 0) {
-          await StudyBlock.insertMany(newBlocks);
-          console.log(`[CRON] User ${userId}: Generated ${newBlocks.length} replacement blocks`);
-        }
-      }
+     // Regenerate for all affected users
+const userIds = [...new Set(actuallyOverdue.map(b => b.user.toString()))];
+for (const userId of userIds) {
+  const exams = await Exam.find({ user: userId });
+  const allBlocks = await StudyBlock.find({ user: userId });
+  
+  // FIX: Start from current hour + 1, not 9 or 15
+  const now = new Date();
+  const currentHourIST = Number(now.toLocaleTimeString('en-GB', {
+    timeZone: 'Asia/Kolkata',
+    hour: '2-digit'
+  }));
+  
+  const config = {
+    startDate: new Date(),
+    startHour: Math.min(22, currentHourIST + 1), // Start 1 hour from now
+    endHour: 23,
+    studyBlock: 25,
+    breakBlock: 5
+  };
+  
+  console.log(` Regenerating for user ${userId} starting ${config.startHour}:00`);
+  
+  const result = generateSchedule(exams, config, allBlocks);
+  
+  // FIX: Filter only today's future blocks
+  const today = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const newBlocks = result.schedule.flatMap(d => 
+    d.date === today ? d.sessions.map(s => ({
+      user: userId, subject: s.examName, topic: s.topicName, date: s.date,
+      time: s.startTime, startTime: istToUtc(s.startTime), duration: s.duration,
+      isGenerated: true, isBreak: s.isBreak || false, type: s.type || 'Study',
+      color: s.color, status: 'scheduled', priority: s.priority
+    })) : []
+  );
+  
+  if (newBlocks.length > 0) {
+    await StudyBlock.insertMany(newBlocks);
+    console.log(` User ${userId}: Generated ${newBlocks.length} replacement blocks`);
+  } else {
+    console.log(` User ${userId}: No available time slots today. Warnings:`, result.warnings);
+  }
+}
     }
 
   } catch (err) {
