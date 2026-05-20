@@ -42,15 +42,22 @@ router.get('/', auth, async (req, res) => {
   }
 });
 
-// GET /api/schedule/today - Show ALL blocks including breaks
+
+// GET /api/schedule/today - CRITICAL FIX
 router.get('/today', auth, async (req, res) => {
   try {
-    const userId = req.user._id;
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-    const blocks = await StudyBlock.find({ userId, date: today }).sort({ time: 1 });
+    
+    const blocks = await StudyBlock.find({
+      userId: req.user.id,
+      date: today,
+      completed: false,
+      missed: false 
+    }).sort({ time: 1 });
+
     res.json(blocks);
   } catch (err) {
-    console.error('Today route error:', err.message);
+    console.error(err);
     res.status(500).json({ msg: 'Server error' });
   }
 });
