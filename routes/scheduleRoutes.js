@@ -101,7 +101,7 @@ router.get('/exams', auth, async (req, res) => {
       const totalHours = blocks.reduce((sum, b) => sum + b.duration / 60, 0);
       const completedHours = blocks.filter(b => b.completed).reduce((sum, b) => sum + b.duration / 60, 0);
       return {
-      ...exam.toObject(),
+     ...exam.toObject(),
         totalScheduledHours: Number(totalHours.toFixed(1)),
         completedHours: Number(completedHours.toFixed(1))
       };
@@ -415,14 +415,14 @@ router.patch('/:id/complete', auth, async (req, res) => {
   }
 });
 
-// PATCH /api/schedule/:id/missed - FIXED TO PREVENT DUPLICATES
+// PATCH /api/schedule/:id/missed - DELETE MISSED BLOCK + REGENERATE
 router.patch('/:id/missed', auth, async (req, res) => {
   try {
     const userId = req.user._id;
     const blockId = req.params.id;
     if (!mongoose.Types.ObjectId.isValid(blockId)) return res.status(400).json({ msg: 'Invalid block ID' });
-    
-    const missedBlock = await StudyBlock.findOneAndUpdate({ _id: blockId, userId }, { missed: true, completed: false }, { new: true });
+
+    const missedBlock = await StudyBlock.findOne({ _id: blockId, userId });
     if (!missedBlock) return res.status(404).json({ msg: 'Block not found' });
     if (missedBlock.isBreak) return res.status(400).json({ success: false, msg: 'Breaks cannot be marked as missed' });
 
@@ -436,31 +436,32 @@ router.patch('/:id/missed', auth, async (req, res) => {
       breakRatio: exams[0]?.breakRatio || { study: 50, break: 10 }
     };
 
-    // FIX 1: Get all blocks that should stay, including the one we just missed
     const existingBlocks = await StudyBlock.find({
       userId,
+      _id: { $ne: blockId },
       date: { $gte: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) },
       $or: [
-        { isGenerated: false }, // Keep manual blocks
-        { completed: true }, // Keep completed blocks 
-        { missed: true } // Keep missed blocks so we don't double-book
+        { isGenerated: false },
+        { completed: true }
       ]
     });
 
-    // FIX 2: Only delete future GENERATED blocks that aren't completed or missed
     await StudyBlock.deleteMany({
       userId,
-      date: { $gte: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) },
-      isGenerated: true,
-      completed: false,
-      missed: false
+      $or: [
+        { _id: blockId },
+        {
+          date: { $gte: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) },
+          isGenerated: true,
+          completed: false
+        }
+      ]
     });
 
-    // FIX 3: Pass existingBlocks to scheduler so it avoids those times
     const result = generateSchedule(exams, config, existingBlocks);
-    
+
     if (result.conflicts?.length > 0) {
-      await StudyBlock.findByIdAndUpdate(blockId, { missed: false });
+      await StudyBlock.create(missedBlock.toObject());
       return res.status(400).json({ msg: 'Cannot reschedule - insufficient time', conflicts: result.conflicts });
     }
 
@@ -470,10 +471,64 @@ router.patch('/:id/missed', auth, async (req, res) => {
       isBreak: s.isBreak || false, type: s.type || 'Study', intervalDay: s.intervalDay,
       priority: s.priority, color: s.color
     })));
+
     if (newBlocks.length > 0) await StudyBlock.insertMany(newBlocks);
-    res.json({ success: true, msg: `Full schedule regenerated`, newBlocksCreated: newBlocks.length });
+
+    res.json({ success: true, msg: `Block deleted and rescheduled`, newBlocksCreated: newBlocks.length });
   } catch (err) {
     console.error('Dynamic reschedule error:', err);
+    res.status(500).json({ msg: 'Server Error', error: err.message });
+  }
+});
+
+// POST /api/schedule/:id/start - START LATE AND SHIFT FOLLOWING BLOCKS
+router.post('/:id/start', auth, async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const blockId = req.params.id;
+    const block = await StudyBlock.findOne({ _id: blockId, userId });
+
+    if (!block) return res.status(404).json({ msg: 'Block not found' });
+    if (block.completed || block.missed) return res.status(400).json({ msg: 'Block already completed or missed' });
+
+    const now = new Date();
+    const currentTime = now.toLocaleTimeString('en-GB', {
+      timeZone: 'Asia/Kolkata',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+
+    const today = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+
+    const [oldH, oldM] = block.time.split(':').map(Number);
+    const [newH, newM] = currentTime.split(':').map(Number);
+    const oldMinutes = oldH * 60 + oldM;
+    const newMinutes = newH * 60 + newM;
+    const shiftMinutes = newMinutes - oldMinutes;
+
+    if (shiftMinutes <= 0) return res.status(400).json({ msg: 'Cannot start before scheduled time' });
+
+    const futureBlocks = await StudyBlock.find({
+      userId,
+      date: today,
+      time: { $gt: block.time },
+      _id: { $ne: blockId }
+    }).sort({ time: 1 });
+
+    await StudyBlock.updateOne({ _id: blockId }, { time: currentTime, startTime: istToUtc(currentTime) });
+
+    for (const futureBlock of futureBlocks) {
+      const [fh, fm] = futureBlock.time.split(':').map(Number);
+      const totalMin = fh * 60 + fm + shiftMinutes;
+      const newH = Math.floor(totalMin / 60);
+      const newM = totalMin % 60;
+      const newTime = `${String(newH).padStart(2,'0')}:${String(newM).padStart(2,'0')}`;
+      await StudyBlock.updateOne({ _id: futureBlock._id }, { time: newTime, startTime: istToUtc(newTime) });
+    }
+
+    res.json({ success: true, msg: `Started at ${currentTime}, shifted ${futureBlocks.length} blocks` });
+  } catch (err) {
+    console.error('Start block error:', err);
     res.status(500).json({ msg: 'Server Error', error: err.message });
   }
 });
