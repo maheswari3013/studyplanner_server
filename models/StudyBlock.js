@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 
 const StudyBlockSchema = new mongoose.Schema({
-  userId: {
+  user: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
@@ -70,8 +70,8 @@ const StudyBlockSchema = new mongoose.Schema({
   loggedAt: Date
 }, { timestamps: true });
 
-StudyBlockSchema.index({ userId: 1, date: 1 });
-StudyBlockSchema.index({ userId: 1, subject: 1, date: 1 });
-StudyBlockSchema.index({ date: 1, startTime: 1 }); // Add this for cron performance
+StudyBlockSchema.index({ user: 1, date: 1 });
+StudyBlockSchema.index({ user: 1, subject: 1, date: 1 });
+StudyBlockSchema.index({ date: 1, startTime: 1 });
 
 module.exports = mongoose.model('StudyBlock', StudyBlockSchema);

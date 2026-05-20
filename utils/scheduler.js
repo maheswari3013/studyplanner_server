@@ -18,7 +18,7 @@ const normalizeTopics = (exam) => {
   }
   if (exam.totalHours > 0) {
     const topicNames = exam.syllabusTopics?.length > 0
-    ? exam.syllabusTopics.filter(t => typeof t === 'string' && t.trim())
+   ? exam.syllabusTopics.filter(t => typeof t === 'string' && t.trim())
       : ['General'];
     const hoursPerTopic = exam.totalHours / topicNames.length;
     return topicNames.map(name => ({ name: name.trim(), hours: hoursPerTopic }));
@@ -50,7 +50,7 @@ const isTimeOccupied = (date, startTime, duration, existingBlocks) => {
 };
 
 function generateSchedule(exams, config, existingBlocks = []) {
-  const { startDate, startHour, endHour, studyBlock, breakBlock, daysToSchedule = 1 } = config;
+  const { startDate, startHour, endHour, studyBlock, breakBlock } = config;
   const result = { schedule: [], conflicts: [], warnings: [], metadata: {} };
 
   const startDateStr = startDate? toISTDateString(startDate) : toISTDateString(new Date());
@@ -58,7 +58,11 @@ function generateSchedule(exams, config, existingBlocks = []) {
 
   const examDates = exams.map(e => new Date(e.examDate || e.date)).filter(d =>!isNaN(d));
   const lastExamDate = examDates.length > 0? new Date(Math.max(...examDates)) : new Date(startDateObj);
-  lastExamDate.setDate(lastExamDate.getDate() + 1);
+  lastExamDate.setDate(lastExamDate.getDate() - 1); // Stop day before last exam
+
+  // FIX 1: Calculate daysToSchedule properly - from startDate to day before earliest exam
+  const earliestExam = examDates.length > 0? new Date(Math.min(...examDates)) : lastExamDate;
+  const daysToSchedule = Math.max(1, Math.ceil((earliestExam - startDateObj) / (1000 * 60 * 60 * 24)));
 
   const availableDaysMap = new Map();
   let currentDate = new Date(startDateObj);
@@ -77,7 +81,8 @@ function generateSchedule(exams, config, existingBlocks = []) {
     };
 
     exams.forEach(exam => {
-      const examHours = exam.availableHours?.[dayName] || (endHour - startHour);
+      // FIX 2: Actually use exam.availableHours from form
+      const examHours = exam.availableHours?.[dayName];
       if (examHours > 0) {
         const examKey = exam._id? exam._id.toString() : exam.subject;
         dayData.examCaps[examKey] = {
