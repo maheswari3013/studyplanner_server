@@ -325,10 +325,10 @@ router.post('/generate', auth, async (req, res) => {
       startDate: new Date(),
       startHour: Math.max(9, currentHour + 1),
       endHour: 23,
-      studyBlock: 25,
-      breakBlock: 5,
+      studyBlock: 50,
+      breakBlock: 10,
       daysToSchedule: daysToSchedule, // <-- HERE
-      breakRatio: { study: 25, break: 5 }
+      breakRatio: { study: 50, break: 10 }
     };
 
     console.log('Config:', config);
@@ -504,8 +504,8 @@ router.patch('/:id/missed', auth, async (req, res) => {
       startDate: new Date(),
       startHour: 9,
       endHour: 23,
-      studyBlock: exam.breakRatio?.study || 25,
-      breakBlock: exam.breakRatio?.break || 5
+      studyBlock: exam.breakRatio?.study || 50,
+      breakBlock: exam.breakRatio?.break || 10
     };
 
     const result = generateSchedule(exams, config, allBlocks);

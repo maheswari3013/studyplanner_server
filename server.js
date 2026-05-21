@@ -19,7 +19,6 @@ const allowedOrigins = [
 
 const corsOptions = {
   origin: function (origin, callback) {
-    console.log('Origin:', origin);
     if (!origin) return callback(null, true);
     if (origin.endsWith('.vercel.app') || allowedOrigins.includes(origin)) {
       return callback(null, true);
@@ -57,7 +56,6 @@ const calculateDaysToSchedule = (exams) => {
   dayBeforeExam.setDate(dayBeforeExam.getDate() - 1);
   const diffTime = dayBeforeExam - today;
   const daysToSchedule = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1);
-  console.log(`[SCHEDULE] Exam: ${examDay.toLocaleDateString('en-CA')}, Days: ${daysToSchedule}`);
   return daysToSchedule;
 };
 
@@ -73,7 +71,7 @@ const startCronJobs = () => {
         minute: '2-digit'
       });
 
-      console.log(` Running at ${currentTime} IST for date ${today}`);
+      console.log(`Running at ${currentTime} IST for date ${today}`);
 
       const blocks = await StudyBlock.find({
         date: today,
@@ -82,7 +80,7 @@ const startCronJobs = () => {
         isBreak: false
       });
 
-      console.log(` Found ${blocks.length} active blocks to check`);
+      console.log(`Found ${blocks.length} active blocks to check`);
 
       const overdueBlocks = [];
       for (const block of blocks) {
@@ -92,31 +90,31 @@ const startCronJobs = () => {
 
         if (now > blockEnd) {
           if (!block.examId) {
-            console.log(` SKIP: ${block.subject} ${block.time} - no examId`);
+            console.log(`SKIP: ${block.subject} ${block.time} - no examId`);
             await StudyBlock.updateOne({ _id: block._id }, { missed: true });
             continue;
           }
           overdueBlocks.push(block);
-          console.log(` OVERDUE: ${block.subject} ${block.time}`);
+          console.log(`OVERDUE: ${block.subject} ${block.time}`);
         }
       }
 
       if (overdueBlocks.length === 0) {
-        console.log(` No overdue blocks`);
+        console.log(`No overdue blocks`);
         return;
       }
 
-      const userIds = [...new Set(overdueBlocks.map(b => b.userId.toString()))];
+      const userIds = [...new Set(overdueBlocks.map(b => b.user.toString()))];
 
       for (const userId of userIds) {
         try {
-          const userOverdue = overdueBlocks.filter(b => b.userId.toString() === userId);
+          const userOverdue = overdueBlocks.filter(b => b.user.toString() === userId);
           const overdueIds = userOverdue.map(b => b._id);
 
           await StudyBlock.updateMany({ _id: { $in: overdueIds } }, { missed: true });
-          console.log(` Marked ${userOverdue.length} blocks as missed for user ${userId}`);
+          console.log(`Marked ${userOverdue.length} blocks as missed for user ${userId}`);
 
-          const exams = await Exam.find({ userId });
+          const exams = await Exam.find({ user: userId });
           if (exams.length === 0) continue;
 
           const daysToSchedule = calculateDaysToSchedule(exams);
@@ -132,13 +130,13 @@ const startCronJobs = () => {
           };
 
           const existingBlocks = await StudyBlock.find({
-            userId,
+            user: userId,
             date: { $gte: today },
             $or: [{ isGenerated: false }, { completed: true }, { missed: true }]
           });
 
           await StudyBlock.deleteMany({
-            userId,
+            user: userId,
             date: { $gte: today },
             isGenerated: true,
             completed: false,
@@ -149,7 +147,7 @@ const startCronJobs = () => {
 
           if (result.conflicts?.length === 0) {
             const newBlocks = result.schedule.flatMap(d => d.sessions.map(s => ({
-              userId,
+              user: userId,
               examId: exams.find(e => e.subject === s.examName)?._id,
               subject: s.examName,
               topic: s.topicName,
@@ -169,15 +167,15 @@ const startCronJobs = () => {
 
             if (newBlocks.length > 0) {
               await StudyBlock.insertMany(newBlocks);
-              console.log(` Created ${newBlocks.length} new blocks for user ${userId}`);
+              console.log(`Created ${newBlocks.length} new blocks for user ${userId}`);
             }
           }
         } catch (userErr) {
-          console.error(` Error for user ${userId}:`, userErr.message);
+          console.error(`Error for user ${userId}:`, userErr.message);
         }
       }
     } catch (err) {
-      console.error(' Fatal error:', err.message);
+      console.error('Fatal error:', err.message);
     }
   });
 };

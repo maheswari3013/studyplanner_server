@@ -1,5 +1,5 @@
 const SPACED_INTERVALS = [1, 3, 7, 14];
-const MIN_BLOCK_HOURS = 0.4; // Changed from 0.5 to allow 25min blocks
+const MIN_BLOCK_HOURS = 0.833; // Changed from 0.5 to allow 25min blocks
 const DAY_NAMES = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 const DEFAULT_BASE_HOURS_PER_TOPIC = 10;
 
@@ -90,7 +90,7 @@ function generateSchedule(exams, config, existingBlocks = []) {
         dayData.examCaps[examKey] = {
           available: examHours,
           used: 0,
-          breakRatio: exam.breakRatio || { study: 25, break: 5 },
+          breakRatio: exam.breakRatio || { study: 50, break: 10 },
           subject: exam.subject,
           color: exam.color || '#3B82F6'
         };
@@ -166,7 +166,7 @@ function generateSchedule(exams, config, existingBlocks = []) {
         knowledgeLevel: exam.currentKnowledge || 3,
         userPriority: exam.priority || 3,
         daysUntilExam: Math.ceil((examDate - new Date(startDateStr)) / (1000 * 60 * 60 * 24)),
-        breakRatio: exam.breakRatio || { study: 25, break: 5 },
+        breakRatio: exam.breakRatio || { study: 50, break: 10 },
         missedHours: missedHours // TRACK THIS
       });
     });
