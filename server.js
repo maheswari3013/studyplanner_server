@@ -20,7 +20,6 @@ const allowedOrigins = [
 const corsOptions = {
   origin: function (origin, callback) {
     console.log('Origin:', origin);
-    // Allow requests with no origin like mobile apps, curl, or Render health checks
     if (!origin) return callback(null, true);
     if (origin.endsWith('.vercel.app') || allowedOrigins.includes(origin)) {
       return callback(null, true);
@@ -36,7 +35,6 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
 // ===== HELPERS =====
-// Helper: Convert IST "HH:MM" to UTC "HH:MM" for cron
 const istToUtc = (timeStr) => {
   const [h, m] = timeStr.split(':').map(Number);
   let utcH = h - 5;
@@ -46,16 +44,15 @@ const istToUtc = (timeStr) => {
   return `${String(utcH).padStart(2, '0')}:${String(utcM).padStart(2, '0')}`;
 };
 
-// Helper: Calculate days from today to day before earliest exam
 const calculateDaysToSchedule = (exams) => {
   if (!exams || exams.length === 0) return 1;
 
   const examDates = exams
-    .map(e => new Date(e.examDate || e.date))
-    .filter(d => !isNaN(d))
-    .sort((a, b) => a - b);
+   .map(e => new Date(e.examDate || e.date))
+   .filter(d =>!isNaN(d))
+   .sort((a, b) => a - b);
 
-  if (examDates.length === 0) return 7; // Default 7 days
+  if (examDates.length === 0) return 7;
 
   const firstExamDate = examDates[0];
   const today = new Date();
@@ -70,7 +67,7 @@ const calculateDaysToSchedule = (exams) => {
   const diffTime = dayBeforeExam - today;
   const daysToSchedule = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1);
 
-  console.log(`[SCHEDULE] Exam: ${examDay.toLocaleDateString('en-CA')}, Days to schedule: ${daysToSchedule}`);
+  console.log(`[SCHEDULE] Exam: ${examDay.toLocaleDateString('en-CA')}, Days: ${daysToSchedule}`);
   return daysToSchedule;
 };
 
@@ -105,6 +102,12 @@ const startCronJobs = () => {
         blockEnd.setMinutes(blockEnd.getMinutes() + block.duration);
 
         if (now > blockEnd) {
+          // FIX: Skip blocks with no examId to prevent crash
+          if (!block.examId) {
+            console.log(`[CRON] SKIP: ${block.subject} ${block.time} - no examId`);
+            await StudyBlock.updateOne({ _id: block._id }, { missed: true });
+            continue;
+          }
           overdueBlocks.push(block);
           console.log(`[CRON] OVERDUE: ${block.subject} ${block.time}`);
         }
@@ -118,78 +121,86 @@ const startCronJobs = () => {
       const userIds = [...new Set(overdueBlocks.map(b => b.userId.toString()))];
 
       for (const userId of userIds) {
-        const userOverdue = overdueBlocks.filter(b => b.userId.toString() === userId);
-        const overdueIds = userOverdue.map(b => b._id);
+        try {
+          const userOverdue = overdueBlocks.filter(b => b.userId.toString() === userId);
+          const overdueIds = userOverdue.map(b => b._id);
 
-        await StudyBlock.updateMany(
-          { _id: { $in: overdueIds } },
-          { missed: true }
-        );
-        console.log(`[CRON] Marked ${userOverdue.length} blocks as missed for user ${userId}`);
-
-        const exams = await Exam.find({ userId });
-        if (exams.length === 0) continue;
-
-        const daysToSchedule = calculateDaysToSchedule(exams);
-
-        const config = {
-          startDate: new Date(),
-          startHour: 9,
-          endHour: 22,
-          studyBlock: exams[0]?.breakRatio?.study || 50,
-          breakBlock: exams[0]?.breakRatio?.break || 10,
-          daysToSchedule: daysToSchedule,
-          breakRatio: exams[0]?.breakRatio || { study: 50, break: 10 }
-        };
-
-        const existingBlocks = await StudyBlock.find({
-          userId,
-          date: { $gte: today },
-          $or: [
-            { isGenerated: false },
-            { completed: true },
+          await StudyBlock.updateMany(
+            { _id: { $in: overdueIds } },
             { missed: true }
-          ]
-        });
+          );
+          console.log(`[CRON] Marked ${userOverdue.length} blocks as missed for user ${userId}`);
 
-        await StudyBlock.deleteMany({
-          userId,
-          date: { $gte: today },
-          isGenerated: true,
-          completed: false,
-          missed: false
-        });
+          const exams = await Exam.find({ userId });
+          if (exams.length === 0) {
+            console.log(`[CRON] SKIP regenerate: No exams for user ${userId}`);
+            continue;
+          }
 
-        const result = generateSchedule(exams, config, existingBlocks);
-        console.log(`[CRON] Regenerate: ${result.schedule?.length || 0} days, conflicts: ${result.conflicts?.length || 0}`);
+          const daysToSchedule = calculateDaysToSchedule(exams);
 
-        if (result.conflicts?.length === 0) {
-          const newBlocks = result.schedule.flatMap(d => d.sessions.map(s => ({
+          const config = {
+            startDate: new Date(),
+            startHour: 9,
+            endHour: 22,
+            studyBlock: exams[0]?.breakRatio?.study || 50,
+            breakBlock: exams[0]?.breakRatio?.break || 10,
+            daysToSchedule: daysToSchedule,
+            breakRatio: exams[0]?.breakRatio || { study: 50, break: 10 }
+          };
+
+          const existingBlocks = await StudyBlock.find({
             userId,
-            subject: s.examName,
-            topic: s.topicName,
-            date: s.date,
-            time: s.startTime,
-            startTime: istToUtc(s.startTime),
-            duration: s.duration,
+            date: { $gte: today },
+            $or: [
+              { isGenerated: false },
+              { completed: true },
+              { missed: true }
+            ]
+          });
+
+          await StudyBlock.deleteMany({
+            userId,
+            date: { $gte: today },
             isGenerated: true,
-            isBreak: s.isBreak || false,
-            type: s.type || 'Study',
-            intervalDay: s.intervalDay,
-            priority: s.priority,
-            color: s.color,
             completed: false,
             missed: false
-          })));
+          });
 
-          if (newBlocks.length > 0) {
-            await StudyBlock.insertMany(newBlocks);
-            console.log(`[CRON] Created ${newBlocks.length} new blocks for user ${userId}`);
+          const result = generateSchedule(exams, config, existingBlocks);
+          console.log(`[CRON] Regenerate: ${result.schedule?.length || 0} days, conflicts: ${result.conflicts?.length || 0}`);
+
+          if (result.conflicts?.length === 0) {
+            const newBlocks = result.schedule.flatMap(d => d.sessions.map(s => ({
+              userId,
+              examId: exams.find(e => e.subject === s.examName)?._id, // Add examId
+              subject: s.examName,
+              topic: s.topicName,
+              date: s.date,
+              time: s.startTime,
+              startTime: istToUtc(s.startTime),
+              duration: s.duration,
+              isGenerated: true,
+              isBreak: s.isBreak || false,
+              type: s.type || 'Study',
+              intervalDay: s.intervalDay,
+              priority: s.priority,
+              color: s.color,
+              completed: false,
+              missed: false
+            })));
+
+            if (newBlocks.length > 0) {
+              await StudyBlock.insertMany(newBlocks);
+              console.log(`[CRON] Created ${newBlocks.length} new blocks for user ${userId}`);
+            }
           }
+        } catch (userErr) {
+          console.error(`[CRON] Error for user ${userId}:`, userErr.message);
         }
       }
     } catch (err) {
-      console.error('Error:', err.message);
+      console.error('[CRON] Fatal error:', err.message);
     }
   });
 };
@@ -217,15 +228,15 @@ app.use(errorHandler);
 const PORT = process.env.PORT || 5000;
 
 connectDB()
-  .then(() => {
+ .then(() => {
     console.log('MongoDB connected successfully');
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
-      startCronJobs(); // Start cron only after DB is ready
-      require('./utils/reminderScheduler'); // Start this after DB too
+      startCronJobs();
+      require('./utils/reminderScheduler');
     });
   })
-  .catch((err) => {
+ .catch((err) => {
     console.error('MongoDB connection failed:', err.message);
-    process.exit(1); // Exit so Render shows the real error
+    process.exit(1);
   });
