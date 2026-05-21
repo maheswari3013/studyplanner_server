@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 
 const UserSchema = new mongoose.Schema({
-  name: {
+  username: {
     type: String,
     required: true
   },
@@ -26,25 +26,25 @@ const UserSchema = new mongoose.Schema({
   subjectConfidence: { type: Map, of: Number, default: {} },
   showAffirmations: { type: Boolean, default: true },
   theme: {
-  type: String,
-  enum: ['light', 'dark'],
-  default: 'light'
-}, 
+    type: String,
+    enum: ['light', 'dark'],
+    default: 'light'
+  },
   subscriptions: [{
-  endpoint: String,
-  expirationTime: Number,
-  keys: {
-    p256dh: String,
-    auth: String
-  }
-}],
+    endpoint: String,
+    expirationTime: Number,
+    keys: {
+      p256dh: String,
+      auth: String
+    }
+  }],
   lastActive: { type: Date, default: Date.now },
-role: {
-  type: String,
-  enum: ['user', 'admin'],
-  default: 'user',
-  index: true
-}
+  role: {
+    type: String,
+    enum: ['user', 'admin'],
+    default: 'user',
+    index: true
+  }
 });
 
 module.exports = mongoose.models.User || mongoose.model('User', UserSchema);

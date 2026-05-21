@@ -13,13 +13,14 @@ const app = express();
 // ===== CORS CONFIG =====
 const allowedOrigins = [
   'http://localhost:5173',
-  'https://studyplanner-client.vercel.app'
+  'https://studyplanner-client.vercel.app',
+  'https://studyplanner-api-awmh.onrender.com'
 ];
 
 const corsOptions = {
   origin: function (origin, callback) {
     console.log('Origin:', origin);
-    // Allow requests with no origin like mobile apps or curl
+    // Allow requests with no origin like mobile apps, curl, or Render health checks
     if (!origin) return callback(null, true);
     if (origin.endsWith('.vercel.app') || allowedOrigins.includes(origin)) {
       return callback(null, true);
@@ -42,33 +43,33 @@ const istToUtc = (timeStr) => {
   let utcM = m - 30;
   if (utcM < 0) { utcM += 60; utcH -= 1; }
   if (utcH < 0) utcH += 24;
-  return `${String(utcH).padStart(2,'0')}:${String(utcM).padStart(2,'0')}`;
+  return `${String(utcH).padStart(2, '0')}:${String(utcM).padStart(2, '0')}`;
 };
 
 // Helper: Calculate days from today to day before earliest exam
 const calculateDaysToSchedule = (exams) => {
   if (!exams || exams.length === 0) return 1;
-  
+
   const examDates = exams
     .map(e => new Date(e.examDate || e.date))
     .filter(d => !isNaN(d))
     .sort((a, b) => a - b);
-  
+
   if (examDates.length === 0) return 7; // Default 7 days
-  
+
   const firstExamDate = examDates[0];
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  
+
   const examDay = new Date(firstExamDate);
   examDay.setHours(0, 0, 0, 0);
-  
+
   const dayBeforeExam = new Date(examDay);
   dayBeforeExam.setDate(dayBeforeExam.getDate() - 1);
-  
+
   const diffTime = dayBeforeExam - today;
   const daysToSchedule = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1);
-  
+
   console.log(`[SCHEDULE] Exam: ${examDay.toLocaleDateString('en-CA')}, Days to schedule: ${daysToSchedule}`);
   return daysToSchedule;
 };
@@ -188,7 +189,7 @@ const startCronJobs = () => {
         }
       }
     } catch (err) {
-      console.error(' Error:', err.message);
+      console.error('Error:', err.message);
     }
   });
 };

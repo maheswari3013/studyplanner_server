@@ -7,54 +7,58 @@ const OTP = require('../models/OTP');
 const auth = require('../middleware/auth');
 const { sendOTPEmail } = require('../utils/sendEmail');
 
-// POST /api/auth/send-otp - Step 1 of register
-router.post('/send-otp', async (req, res) => {
-  const { name, email, password } = req.body;
-  
+const validatePassword = (password) => {
+  const regex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{6,}$/;
+  return regex.test(password);
+};
+
+// POST /api/auth/register
+router.post('/register', async (req, res) => {
+  const { username, email, password } = req.body;
+
   try {
-    if (!name ||!email ||!password) {
+    if (!username ||!email ||!password) {
       return res.status(400).json({ msg: 'Please provide all fields' });
+    }
+
+    if (!validatePassword(password)) {
+      return res.status(400).json({ msg: 'Password must be 6+ chars with upper, lower, number & symbol' });
     }
 
     let user = await User.findOne({ email });
     if (user) return res.status(400).json({ msg: 'User already exists' });
 
-    // Password validation
-    if (password.length < 8) {
-      return res.status(400).json({ msg: 'Password must be at least 8 characters' });
-    }
+    await OTP.deleteMany({ email, type: 'register' });
 
-    await OTP.deleteMany({ email }); // Remove old OTPs
-    
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    await OTP.create({ name, email, password: hashedPassword, otp });
-    await sendOTPEmail(email, otp);
+    await OTP.create({ username, email, password: hashedPassword, otp, type: 'register' });
+    await sendOTPEmail(email, otp, 'register');
 
     res.json({ success: true, msg: 'OTP sent to your email' });
   } catch (err) {
-    console.error('Send OTP error:', err.message);
+    console.error('Register error:', err.message);
     res.status(500).json({ msg: 'Failed to send OTP' });
   }
 });
 
-// POST /api/auth/verify-otp - Step 2 of register
-router.post('/verify-otp', async (req, res) => {
+// POST /api/auth/verify-register
+router.post('/verify-register', async (req, res) => {
   const { email, otp } = req.body;
-  
+
   try {
-    const otpDoc = await OTP.findOne({ email, otp });
+    const otpDoc = await OTP.findOne({ email, otp, type: 'register' });
     if (!otpDoc) return res.status(400).json({ msg: 'Invalid or expired OTP' });
 
-    const user = new User({ 
-      name: otpDoc.name, 
-      email: otpDoc.email, 
-      password: otpDoc.password 
+    const user = new User({
+      username: otpDoc.username,
+      email: otpDoc.email,
+      password: otpDoc.password
     });
     await user.save();
-    await OTP.deleteMany({ email });
+    await OTP.deleteMany({ email, type: 'register' });
 
     const payload = { id: user._id };
     jwt.sign(
@@ -63,9 +67,9 @@ router.post('/verify-otp', async (req, res) => {
       { expiresIn: '5d' },
       (err, token) => {
         if (err) throw err;
-        const userData = { 
+        const userData = {
           _id: user._id,
-          name: user.name, 
+          username: user.username,
           email: user.email,
           theme: user.theme
         };
@@ -73,21 +77,22 @@ router.post('/verify-otp', async (req, res) => {
       }
     );
   } catch (err) {
-    console.error('Verify OTP error:', err.message);
+    console.error('Verify register error:', err.message);
     res.status(500).json({ msg: 'Server error' });
   }
 });
 
-// POST /api/auth/login - Direct login, no OTP
+// POST /api/auth/login
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
-  
+
   try {
     const user = await User.findOne({ email });
     if (!user) return res.status(400).json({ msg: 'Invalid credentials' });
 
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) return res.status(400).json({ msg: 'Invalid credentials' });
+
 
     const payload = { id: user._id };
     jwt.sign(
@@ -96,11 +101,12 @@ router.post('/login', async (req, res) => {
       { expiresIn: '5d' },
       (err, token) => {
         if (err) throw err;
-        const userData = { 
+        const userData = {
           _id: user._id,
-          name: user.name, 
+          username: user.username,
           email: user.email,
-          theme: user.theme
+          theme: user.theme,
+          role: user.role
         };
         res.json({ token, user: userData });
       }
@@ -111,7 +117,53 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// GET /api/auth/user - Get current user
+// POST /api/auth/forgot-password
+router.post('/forgot-password', async (req, res) => {
+  const { email } = req.body;
+
+  try {
+    const user = await User.findOne({ email });
+    if (!user) return res.status(400).json({ msg: 'No account found with this email' });
+
+    await OTP.deleteMany({ email, type: 'reset' });
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    await OTP.create({ email, otp, type: 'reset' });
+    await sendOTPEmail(email, otp, 'reset');
+
+    res.json({ success: true, msg: 'Reset OTP sent to your email' });
+  } catch (err) {
+    console.error('Forgot password error:', err.message);
+    res.status(500).json({ msg: 'Failed to send OTP' });
+  }
+});
+
+// POST /api/auth/reset-password
+router.post('/reset-password', async (req, res) => {
+  const { email, otp, newPassword } = req.body;
+
+  try {
+    if (!validatePassword(newPassword)) {
+      return res.status(400).json({ msg: 'Password must be 6+ chars with upper, lower, number & symbol' });
+    }
+
+    const otpDoc = await OTP.findOne({ email, otp, type: 'reset' });
+    if (!otpDoc) return res.status(400).json({ msg: 'Invalid or expired OTP' });
+
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(newPassword, salt);
+
+    await User.findOneAndUpdate({ email }, { password: hashedPassword });
+    await OTP.deleteMany({ email, type: 'reset' });
+
+    res.json({ success: true, msg: 'Password reset successful' });
+  } catch (err) {
+    console.error('Reset password error:', err.message);
+    res.status(500).json({ msg: 'Server error' });
+  }
+});
+
+// GET /api/auth/user
 router.get('/user', auth, async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select('-password');
@@ -125,23 +177,23 @@ router.get('/user', auth, async (req, res) => {
 
 // PATCH /api/auth/profile
 router.patch('/profile', auth, async (req, res) => {
-  const { name, email, theme } = req.body;
+  const { username, email, theme } = req.body;
 
   try {
     const updateData = {};
-    if (name!== undefined) updateData.name = name;
+    if (username!== undefined) updateData.username = username;
     if (email!== undefined) updateData.email = email;
     if (theme!== undefined) updateData.theme = theme;
 
     if (email) {
-      const existing = await User.findOne({ email, _id: { $ne: req.user._id } });
+      const existing = await User.findOne({ email, _id: { $ne: req.user.id } });
       if (existing) {
         return res.status(400).json({ msg: 'Email already in use' });
       }
     }
 
     const user = await User.findByIdAndUpdate(
-      req.user._id,
+      req.user.id,
       { $set: updateData },
       { new: true, runValidators: true }
     ).select('-password');
@@ -160,9 +212,9 @@ router.patch('/profile', auth, async (req, res) => {
 // POST /api/auth/change-password
 router.post('/change-password', auth, async (req, res) => {
   const { currentPassword, newPassword } = req.body;
-  
+
   try {
-    const user = await User.findById(req.user._id);
+    const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ msg: 'User not found' });
 
     const isMatch = await bcrypt.compare(currentPassword, user.password);
@@ -170,8 +222,8 @@ router.post('/change-password', auth, async (req, res) => {
       return res.status(400).json({ msg: 'Current password is incorrect' });
     }
 
-    if (newPassword.length < 6) {
-      return res.status(400).json({ msg: 'New password must be at least 6 characters' });
+    if (!validatePassword(newPassword)) {
+      return res.status(400).json({ msg: 'Password must be 6+ chars with upper, lower, number & symbol' });
     }
 
     const salt = await bcrypt.genSalt(10);
