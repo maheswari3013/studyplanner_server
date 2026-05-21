@@ -15,7 +15,10 @@ module.exports = async function(req, res, next) {
       return res.status(401).json({ msg: 'Invalid token payload' });
     }
       
-    req.user = { id: userId };
+    req.user = { 
+  id: userId,
+  role: decoded.role,   
+  email: decoded.email  
     
     await User.findByIdAndUpdate(userId, { lastActive: new Date() });
     next();

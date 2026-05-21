@@ -35,9 +35,11 @@ router.post('/register', async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, salt);
 
     await OTP.create({ username, email, password: hashedPassword, otp, type: 'register' });
+    console.log('OTP saved to DB:', { email, otp, type: 'register' }); // ADD THIS LINE
 
     try {
       await sendOTPEmail(email, otp, 'register');
+      console.log('SendGrid accepted email for:', email); // ADD THIS TOO
       res.json({ success: true, msg: 'OTP sent to your email' });
     } catch (emailErr) {
       console.error('SendOTP Error:', emailErr.message);
@@ -71,7 +73,7 @@ router.post('/verify-register', async (req, res) => {
     await user.save();
     await OTP.deleteMany({ email, type: 'register' });
 
-    const payload = { id: user._id };
+    const payload = { id: user._id, email: user.email, role: user.role };
     jwt.sign(
       payload,
       process.env.JWT_SECRET,
@@ -104,7 +106,7 @@ router.post('/login', async (req, res) => {
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) return res.status(400).json({ msg: 'Invalid credentials' });
 
-    const payload = { id: user._id };
+    const payload = { id: user._id, email: user.email, role: user.role };
     jwt.sign(
       payload,
       process.env.JWT_SECRET,

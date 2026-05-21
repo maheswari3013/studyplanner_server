@@ -5,6 +5,7 @@ const isAdmin = require('../middleware/isAdmin');
 const User = require('../models/User');
 const StudyBlock = require('../models/StudyBlock');
 const Exam = require('../models/Exam');
+const OTP = require('../models/OTP');
 const mongoose = require('mongoose');
 const os = require('os');
 
@@ -20,13 +21,13 @@ router.get('/health', async (req, res) => {
     res.json({
       status: 'ok',
       db: dbState[mongoose.connection.readyState],
-      uptime: Math.floor(process.uptime() / 60), // minutes
+      uptime: Math.floor(process.uptime() / 60),
       memory: {
-        used: Math.round(memUsage.heapUsed / 1024 / 1024), // MB
-        total: Math.round(memUsage.heapTotal / 1024 / 1024), // MB
-        rss: Math.round(memUsage.rss / 1024 / 1024) // MB
+        used: Math.round(memUsage.heapUsed / 1024),
+        total: Math.round(memUsage.heapTotal / 1024),
+        rss: Math.round(memUsage.rss / 1024 / 1024)
       },
-      cpu: os.loadavg()[0].toFixed(2), // 1min load avg
+      cpu: os.loadavg()[0].toFixed(2),
       nodeVersion: process.version,
       timestamp: new Date()
     });
@@ -50,7 +51,8 @@ router.get('/metrics', async (req, res) => {
       totalBlocks,
       completedToday,
       missedToday,
-      overdueBlocks
+      overdueBlocks,
+      totalOtps
     ] = await Promise.all([
       User.countDocuments({}),
       StudyBlock.distinct('user', { updatedAt: { $gte: last24h } }).then(arr => arr.length),
@@ -58,7 +60,8 @@ router.get('/metrics', async (req, res) => {
       StudyBlock.countDocuments({}),
       StudyBlock.countDocuments({ status: 'completed', date: today }),
       StudyBlock.countDocuments({ status: 'missed', date: today }),
-      StudyBlock.countDocuments({ status: 'overdue' })
+      StudyBlock.countDocuments({ status: 'overdue' }),
+      OTP.countDocuments({})
     ]);
 
     res.json({
@@ -73,6 +76,9 @@ router.get('/metrics', async (req, res) => {
         missedToday,
         overdue: overdueBlocks
       },
+      otps: {
+        active: totalOtps
+      },
       timestamp: now
     });
   } catch (err) {
@@ -85,13 +91,11 @@ router.get('/errors', async (req, res) => {
   try {
     const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
 
-    // Cron failure: overdue blocks stuck > 1h means cron didn't reschedule
     const stuckOverdue = await StudyBlock.countDocuments({
       status: 'overdue',
       updatedAt: { $lt: oneHourAgo }
     });
 
-    // Scheduler failure: topics with >10h missed = can't fit in schedule
     const problemExams = await Exam.aggregate([
       { $unwind: '$syllabusTopics' },
       { $match: { 'syllabusTopics.missedHours': { $gt: 10 } } },
@@ -103,6 +107,54 @@ router.get('/errors', async (req, res) => {
       schedulerFailures: problemExams[0]?.count || 0,
       lastChecked: new Date()
     });
+  } catch (err) {
+    res.status(500).json({ msg: 'Server error', error: err.message });
+  }
+});
+
+// GET /api/admin/users - List all users
+router.get('/users', async (req, res) => {
+  try {
+    const users = await User.find().select('-password').sort({ createdAt: -1 }).limit(100);
+    res.json(users);
+  } catch (err) {
+    res.status(500).json({ msg: 'Server error', error: err.message });
+  }
+});
+
+// GET /api/admin/otps - List recent OTPs for debugging
+router.get('/otps', async (req, res) => {
+  try {
+    const otps = await OTP.find().sort({ createdAt: -1 }).limit(50);
+    res.json(otps);
+  } catch (err) {
+    res.status(500).json({ msg: 'Server error', error: err.message });
+  }
+});
+
+// DELETE /api/admin/user/:id - Delete user
+router.delete('/user/:id', async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ msg: 'User not found' });
+    if (user.role === 'admin') return res.status(403).json({ msg: 'Cannot delete admin' });
+    
+    await User.findByIdAndDelete(req.params.id);
+    res.json({ msg: 'User deleted' });
+  } catch (err) {
+    res.status(500).json({ msg: 'Server error', error: err.message });
+  }
+});
+
+// PATCH /api/admin/user/:id/role - Change user role
+router.patch('/user/:id/role', async (req, res) => {
+  try {
+    const { role } = req.body;
+    if (!['user', 'admin'].includes(role)) {
+      return res.status(400).json({ msg: 'Invalid role' });
+    }
+    await User.findByIdAndUpdate(req.params.id, { role });
+    res.json({ msg: 'Role updated' });
   } catch (err) {
     res.status(500).json({ msg: 'Server error', error: err.message });
   }
