@@ -1,28 +1,22 @@
-const nodemailer = require('nodemailer');
-
-const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 465,
-  secure: true,
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
-  },
-  family: 4,
-  connectionTimeout: 5000,
-  greetingTimeout: 5000,
-  socketTimeout: 5000,
-  tls: { rejectUnauthorized: false }
-});
+const sgMail = require('@sendgrid/mail');
+sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
 const sendOTPEmail = async (email, otp, type = 'register') => {
   const subject = type === 'register' ? 'Verify Your StudyPlanner Account' : 'Reset Your StudyPlanner Password';
-  await transporter.sendMail({
-    from: `"StudyPlanner" <${process.env.EMAIL_USER}>`,
+  const msg = {
     to: email,
+    from: 'dmahi3224@gmail.com', 
     subject: subject,
-    html: `<h2>Your OTP: ${otp}</h2><p>Valid for 10 minutes. Do not share this code.</p>`
-  });
+    html: `
+      <div style="font-family: Arial, sans-serif; padding: 20px;">
+        <h2>StudyPlanner OTP</h2>
+        <p>Your OTP code is:</p>
+        <h1 style="color: #4CAF50; letter-spacing: 5px;">${otp}</h1>
+        <p>This code expires in 10 minutes.</p>
+      </div>
+    `
+  };
+  await sgMail.send(msg);
 };
 
 module.exports = { sendOTPEmail };
