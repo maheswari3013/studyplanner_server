@@ -4,7 +4,7 @@ const cron = require('node-cron');
 const connectDB = require('./config/db');
 const StudyBlock = require('./models/StudyBlock');
 const Exam = require('./models/Exam');
-const { generateSchedule, toISTDateString } = require('./utils/scheduler');
+const { generateSchedule } = require('./utils/scheduler');
 const errorHandler = require('./middleware/errorHandler');
 require('dotenv').config();
 
@@ -46,34 +46,23 @@ const istToUtc = (timeStr) => {
 
 const calculateDaysToSchedule = (exams) => {
   if (!exams || exams.length === 0) return 1;
-
-  const examDates = exams
-   .map(e => new Date(e.examDate || e.date))
-   .filter(d =>!isNaN(d))
-   .sort((a, b) => a - b);
-
+  const examDates = exams.map(e => new Date(e.examDate || e.date)).filter(d => !isNaN(d)).sort((a, b) => a - b);
   if (examDates.length === 0) return 7;
-
   const firstExamDate = examDates[0];
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-
   const examDay = new Date(firstExamDate);
   examDay.setHours(0, 0, 0, 0);
-
   const dayBeforeExam = new Date(examDay);
   dayBeforeExam.setDate(dayBeforeExam.getDate() - 1);
-
   const diffTime = dayBeforeExam - today;
   const daysToSchedule = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1);
-
   console.log(`[SCHEDULE] Exam: ${examDay.toLocaleDateString('en-CA')}, Days: ${daysToSchedule}`);
   return daysToSchedule;
 };
 
 // ===== CRON JOBS =====
 const startCronJobs = () => {
-  // CRON: MARK OVERDUE AS MISSED + AUTO-REGENERATE
   cron.schedule('*/1 * * * *', async () => {
     try {
       const now = new Date();
@@ -84,7 +73,7 @@ const startCronJobs = () => {
         minute: '2-digit'
       });
 
-      console.log(`[CRON] Running at ${currentTime} IST for date ${today}`);
+      console.log(` Running at ${currentTime} IST for date ${today}`);
 
       const blocks = await StudyBlock.find({
         date: today,
@@ -93,7 +82,7 @@ const startCronJobs = () => {
         isBreak: false
       });
 
-      console.log(`[CRON] Found ${blocks.length} active blocks to check`);
+      console.log(` Found ${blocks.length} active blocks to check`);
 
       const overdueBlocks = [];
       for (const block of blocks) {
@@ -102,19 +91,18 @@ const startCronJobs = () => {
         blockEnd.setMinutes(blockEnd.getMinutes() + block.duration);
 
         if (now > blockEnd) {
-          // FIX: Skip blocks with no examId to prevent crash
           if (!block.examId) {
-            console.log(`[CRON] SKIP: ${block.subject} ${block.time} - no examId`);
+            console.log(` SKIP: ${block.subject} ${block.time} - no examId`);
             await StudyBlock.updateOne({ _id: block._id }, { missed: true });
             continue;
           }
           overdueBlocks.push(block);
-          console.log(`[CRON] OVERDUE: ${block.subject} ${block.time}`);
+          console.log(` OVERDUE: ${block.subject} ${block.time}`);
         }
       }
 
       if (overdueBlocks.length === 0) {
-        console.log(`[CRON] No overdue blocks`);
+        console.log(` No overdue blocks`);
         return;
       }
 
@@ -125,17 +113,11 @@ const startCronJobs = () => {
           const userOverdue = overdueBlocks.filter(b => b.userId.toString() === userId);
           const overdueIds = userOverdue.map(b => b._id);
 
-          await StudyBlock.updateMany(
-            { _id: { $in: overdueIds } },
-            { missed: true }
-          );
-          console.log(`[CRON] Marked ${userOverdue.length} blocks as missed for user ${userId}`);
+          await StudyBlock.updateMany({ _id: { $in: overdueIds } }, { missed: true });
+          console.log(` Marked ${userOverdue.length} blocks as missed for user ${userId}`);
 
           const exams = await Exam.find({ userId });
-          if (exams.length === 0) {
-            console.log(`[CRON] SKIP regenerate: No exams for user ${userId}`);
-            continue;
-          }
+          if (exams.length === 0) continue;
 
           const daysToSchedule = calculateDaysToSchedule(exams);
 
@@ -152,11 +134,7 @@ const startCronJobs = () => {
           const existingBlocks = await StudyBlock.find({
             userId,
             date: { $gte: today },
-            $or: [
-              { isGenerated: false },
-              { completed: true },
-              { missed: true }
-            ]
+            $or: [{ isGenerated: false }, { completed: true }, { missed: true }]
           });
 
           await StudyBlock.deleteMany({
@@ -168,12 +146,11 @@ const startCronJobs = () => {
           });
 
           const result = generateSchedule(exams, config, existingBlocks);
-          console.log(`[CRON] Regenerate: ${result.schedule?.length || 0} days, conflicts: ${result.conflicts?.length || 0}`);
 
           if (result.conflicts?.length === 0) {
             const newBlocks = result.schedule.flatMap(d => d.sessions.map(s => ({
               userId,
-              examId: exams.find(e => e.subject === s.examName)?._id, // Add examId
+              examId: exams.find(e => e.subject === s.examName)?._id,
               subject: s.examName,
               topic: s.topicName,
               date: s.date,
@@ -192,15 +169,15 @@ const startCronJobs = () => {
 
             if (newBlocks.length > 0) {
               await StudyBlock.insertMany(newBlocks);
-              console.log(`[CRON] Created ${newBlocks.length} new blocks for user ${userId}`);
+              console.log(` Created ${newBlocks.length} new blocks for user ${userId}`);
             }
           }
         } catch (userErr) {
-          console.error(`[CRON] Error for user ${userId}:`, userErr.message);
+          console.error(` Error for user ${userId}:`, userErr.message);
         }
       }
     } catch (err) {
-      console.error('[CRON] Fatal error:', err.message);
+      console.error(' Fatal error:', err.message);
     }
   });
 };
@@ -215,16 +192,12 @@ app.use('/api/notifications', require('./routes/notificationRoutes'));
 app.get('/', (req, res) => res.send('API Running'));
 
 app.use((req, res, next) => {
-  res.status(404).json({
-    success: false,
-    message: 'Route not found',
-    path: req.originalUrl
-  });
+  res.status(404).json({ success: false, message: 'Route not found', path: req.originalUrl });
 });
 
 app.use(errorHandler);
 
-// ===== START SERVER AFTER DB CONNECT =====
+// ===== START SERVER =====
 const PORT = process.env.PORT || 5000;
 
 connectDB()
