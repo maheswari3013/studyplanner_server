@@ -4,7 +4,7 @@ require('dotenv').config();
 
 mongoose.connect(process.env.MONGO_URI).then(async () => {
   const result = await User.updateOne(
-    { email: "replace-with-your-email@gmail.com" }, // Change this
+    { email: "dmahi3224@gmail.com" }, 
     { $set: { role: "admin" } }
   );
   console.log('Updated:', result);
