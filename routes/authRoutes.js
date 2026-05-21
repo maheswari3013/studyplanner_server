@@ -17,7 +17,7 @@ router.post('/register', async (req, res) => {
   const { username, email, password } = req.body;
 
   try {
-    if (!username ||!email ||!password) {
+    if (!username || !email || !password) {
       return res.status(400).json({ msg: 'Please provide all fields' });
     }
 
@@ -35,12 +35,26 @@ router.post('/register', async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, salt);
 
     await OTP.create({ username, email, password: hashedPassword, otp, type: 'register' });
-    await sendOTPEmail(email, otp, 'register');
 
-    res.json({ success: true, msg: 'OTP sent to your email' });
+    // Try sending email, but don't crash if it fails
+    try {
+      await sendOTPEmail(email, otp, 'register');
+      res.json({ success: true, msg: 'OTP sent to your email' });
+    } catch (emailErr) {
+      console.error('SendOTP Error:', emailErr.message);
+      // Return OTP in response so frontend can proceed during email outage
+      // Remove `otp` field in production once email works
+      res.json({ 
+        success: true, 
+        msg: 'Email service unavailable. Use this OTP:', 
+        otp: otp,
+        devMode: true 
+      });
+    }
+
   } catch (err) {
     console.error('Register error:', err.message);
-    res.status(500).json({ msg: 'Failed to send OTP' });
+    res.status(500).json({ msg: 'Server error during registration' });
   }
 });
 
@@ -93,7 +107,6 @@ router.post('/login', async (req, res) => {
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) return res.status(400).json({ msg: 'Invalid credentials' });
 
-
     const payload = { id: user._id };
     jwt.sign(
       payload,
@@ -129,12 +142,23 @@ router.post('/forgot-password', async (req, res) => {
 
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     await OTP.create({ email, otp, type: 'reset' });
-    await sendOTPEmail(email, otp, 'reset');
 
-    res.json({ success: true, msg: 'Reset OTP sent to your email' });
+    try {
+      await sendOTPEmail(email, otp, 'reset');
+      res.json({ success: true, msg: 'Reset OTP sent to your email' });
+    } catch (emailErr) {
+      console.error('SendOTP Error:', emailErr.message);
+      res.json({ 
+        success: true, 
+        msg: 'Email service unavailable. Use this OTP:', 
+        otp: otp,
+        devMode: true 
+      });
+    }
+
   } catch (err) {
     console.error('Forgot password error:', err.message);
-    res.status(500).json({ msg: 'Failed to send OTP' });
+    res.status(500).json({ msg: 'Server error' });
   }
 });
 
@@ -181,9 +205,9 @@ router.patch('/profile', auth, async (req, res) => {
 
   try {
     const updateData = {};
-    if (username!== undefined) updateData.username = username;
-    if (email!== undefined) updateData.email = email;
-    if (theme!== undefined) updateData.theme = theme;
+    if (username !== undefined) updateData.username = username;
+    if (email !== undefined) updateData.email = email;
+    if (theme !== undefined) updateData.theme = theme;
 
     if (email) {
       const existing = await User.findOne({ email, _id: { $ne: req.user.id } });
