@@ -3,22 +3,60 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const OTP = require('../models/OTP');
 const auth = require('../middleware/auth');
+const { sendOTPEmail } = require('../utils/sendEmail');
 
-// POST /api/auth/register - Direct register, no OTP
-router.post('/register', async (req, res) => {
+// POST /api/auth/send-otp - Step 1 of register
+router.post('/send-otp', async (req, res) => {
   const { name, email, password } = req.body;
   
   try {
+    if (!name ||!email ||!password) {
+      return res.status(400).json({ msg: 'Please provide all fields' });
+    }
+
     let user = await User.findOne({ email });
     if (user) return res.status(400).json({ msg: 'User already exists' });
 
-    user = new User({ name, email, password }); // theme defaults to 'light'
-    const salt = await bcrypt.genSalt(10);
-    user.password = await bcrypt.hash(password, salt);
-    await user.save();
+    // Password validation
+    if (password.length < 8) {
+      return res.status(400).json({ msg: 'Password must be at least 8 characters' });
+    }
 
-    const payload = { id: user._id }; // Changed: user.id -> user._id
+    await OTP.deleteMany({ email }); // Remove old OTPs
+    
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
+    await OTP.create({ name, email, password: hashedPassword, otp });
+    await sendOTPEmail(email, otp);
+
+    res.json({ success: true, msg: 'OTP sent to your email' });
+  } catch (err) {
+    console.error('Send OTP error:', err.message);
+    res.status(500).json({ msg: 'Failed to send OTP' });
+  }
+});
+
+// POST /api/auth/verify-otp - Step 2 of register
+router.post('/verify-otp', async (req, res) => {
+  const { email, otp } = req.body;
+  
+  try {
+    const otpDoc = await OTP.findOne({ email, otp });
+    if (!otpDoc) return res.status(400).json({ msg: 'Invalid or expired OTP' });
+
+    const user = new User({ 
+      name: otpDoc.name, 
+      email: otpDoc.email, 
+      password: otpDoc.password 
+    });
+    await user.save();
+    await OTP.deleteMany({ email });
+
+    const payload = { id: user._id };
     jwt.sign(
       payload,
       process.env.JWT_SECRET,
@@ -26,16 +64,16 @@ router.post('/register', async (req, res) => {
       (err, token) => {
         if (err) throw err;
         const userData = { 
-          _id: user._id, // Changed: id -> _id
+          _id: user._id,
           name: user.name, 
           email: user.email,
-          theme: user.theme // ADD THIS for ThemeContext
+          theme: user.theme
         };
         res.json({ token, user: userData });
       }
     );
   } catch (err) {
-    console.error('Register error:', err.message);
+    console.error('Verify OTP error:', err.message);
     res.status(500).json({ msg: 'Server error' });
   }
 });
@@ -51,7 +89,7 @@ router.post('/login', async (req, res) => {
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) return res.status(400).json({ msg: 'Invalid credentials' });
 
-    const payload = { id: user._id }; // Changed: user.id -> user._id
+    const payload = { id: user._id };
     jwt.sign(
       payload,
       process.env.JWT_SECRET,
@@ -59,10 +97,10 @@ router.post('/login', async (req, res) => {
       (err, token) => {
         if (err) throw err;
         const userData = { 
-          _id: user._id, // Changed: id -> _id
+          _id: user._id,
           name: user.name, 
           email: user.email,
-          theme: user.theme // ADD THIS
+          theme: user.theme
         };
         res.json({ token, user: userData });
       }
@@ -72,9 +110,8 @@ router.post('/login', async (req, res) => {
     res.status(500).send('Server error');
   }
 });
-// @route   GET api/auth/user
-// @desc    Get current user
-// @access  Private
+
+// GET /api/auth/user - Get current user
 router.get('/user', auth, async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select('-password');
@@ -86,20 +123,16 @@ router.get('/user', auth, async (req, res) => {
   }
 });
 
-
-
 // PATCH /api/auth/profile
 router.patch('/profile', auth, async (req, res) => {
   const { name, email, theme } = req.body;
 
   try {
-    // Build update object only with fields that were sent
     const updateData = {};
     if (name!== undefined) updateData.name = name;
     if (email!== undefined) updateData.email = email;
     if (theme!== undefined) updateData.theme = theme;
 
-    // Only check email uniqueness if email is being changed
     if (email) {
       const existing = await User.findOne({ email, _id: { $ne: req.user._id } });
       if (existing) {
@@ -114,23 +147,22 @@ router.patch('/profile', auth, async (req, res) => {
     ).select('-password');
 
     if (!user) return res.status(404).json({ msg: 'User not found' });
-
     res.json(user);
   } catch (err) {
     console.error('Update profile error:', err);
-    // Send actual validation error instead of generic 500
     if (err.name === 'ValidationError') {
       return res.status(400).json({ msg: Object.values(err.errors)[0].message });
     }
     res.status(500).json({ msg: 'Server error' });
   }
 });
+
 // POST /api/auth/change-password
 router.post('/change-password', auth, async (req, res) => {
   const { currentPassword, newPassword } = req.body;
   
   try {
-    const user = await User.findById(req.user._id); // Changed: req.user.id -> req.user._id
+    const user = await User.findById(req.user._id);
     if (!user) return res.status(404).json({ msg: 'User not found' });
 
     const isMatch = await bcrypt.compare(currentPassword, user.password);
