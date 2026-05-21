@@ -18,7 +18,7 @@ module.exports = async function(req, res, next) {
     req.user = { 
   id: userId,
   role: decoded.role,   
-  email: decoded.email  
+  email: decoded.email  };
     
     await User.findByIdAndUpdate(userId, { lastActive: new Date() });
     next();
