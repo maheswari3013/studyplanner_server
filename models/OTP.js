@@ -7,9 +7,11 @@ const OTPSchema = new mongoose.Schema({
   otp: { type: String, required: true },
   type: {
     type: String,
-    enum: ['register', 'reset'],
-    default: 'register'
+    enum: ['register', 'reset', 'email-change-old', 'email-change-new'],
+    required: true
   },
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  newEmail: { type: String },
   createdAt: { type: Date, default: Date.now, expires: 600 } // 10 min expiry
 });
 

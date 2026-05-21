@@ -36,14 +36,11 @@ router.post('/register', async (req, res) => {
 
     await OTP.create({ username, email, password: hashedPassword, otp, type: 'register' });
 
-    // Try sending email, but don't crash if it fails
     try {
       await sendOTPEmail(email, otp, 'register');
       res.json({ success: true, msg: 'OTP sent to your email' });
     } catch (emailErr) {
       console.error('SendOTP Error:', emailErr.message);
-      // Return OTP in response so frontend can proceed during email outage
-      // Remove `otp` field in production once email works
       res.json({ 
         success: true, 
         msg: 'Email service unavailable. Use this OTP:', 
@@ -206,13 +203,13 @@ router.patch('/profile', auth, async (req, res) => {
   try {
     const updateData = {};
     if (username !== undefined) updateData.username = username;
-    if (email !== undefined) updateData.email = email;
     if (theme !== undefined) updateData.theme = theme;
-
-    if (email) {
-      const existing = await User.findOne({ email, _id: { $ne: req.user.id } });
-      if (existing) {
-        return res.status(400).json({ msg: 'Email already in use' });
+    
+    // Block direct email changes - must use email change flow
+    if (email !== undefined) {
+      const user = await User.findById(req.user.id);
+      if (email !== user.email) {
+        return res.status(400).json({ msg: 'Use email change flow to update email' });
       }
     }
 
@@ -258,6 +255,110 @@ router.post('/change-password', auth, async (req, res) => {
   } catch (err) {
     console.error('Change password error:', err.message);
     res.status(500).send('Server error');
+  }
+});
+
+// POST /api/auth/request-email-change - Step 1: Send OTP to current email
+router.post('/request-email-change', auth, async (req, res) => {
+  const { newEmail } = req.body;
+  
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ msg: 'User not found' });
+    if (newEmail === user.email) return res.status(400).json({ msg: 'Same as current email' });
+    
+    const existing = await User.findOne({ email: newEmail });
+    if (existing) return res.status(400).json({ msg: 'Email already in use' });
+
+    await OTP.deleteMany({ userId: user.id, type: { $in: ['email-change-old', 'email-change-new'] } });
+
+    const oldEmailOtp = Math.floor(100000 + Math.random() * 900000).toString();
+
+    await OTP.create({
+      userId: user.id,
+      email: user.email,
+      newEmail,
+      otp: oldEmailOtp,
+      type: 'email-change-old'
+    });
+
+    try {
+      await sendOTPEmail(user.email, oldEmailOtp, 'email-change-old', { newEmail });
+      res.json({ success: true, msg: 'OTP sent to current email' });
+    } catch (emailErr) {
+      console.error('SendOTP Error:', emailErr.message);
+      res.json({ 
+        success: true, 
+        msg: 'Email service unavailable. Use this OTP:', 
+        otp: oldEmailOtp,
+        devMode: true 
+      });
+    }
+  } catch (err) {
+    console.error('Request email change error:', err.message);
+    res.status(500).json({ msg: 'Server error' });
+  }
+});
+
+// POST /api/auth/verify-old-email - Step 2: Verify old email + send OTP to new email
+router.post('/verify-old-email', auth, async (req, res) => {
+  const { otp } = req.body;
+  
+  try {
+    const oldOtpDoc = await OTP.findOne({ userId: req.user.id, otp, type: 'email-change-old' });
+    if (!oldOtpDoc) return res.status(400).json({ msg: 'Invalid or expired OTP' });
+
+    const newEmailOtp = Math.floor(100000 + Math.random() * 900000).toString();
+
+    await OTP.create({
+      userId: req.user.id,
+      email: oldOtpDoc.newEmail,
+      otp: newEmailOtp,
+      type: 'email-change-new',
+      newEmail: oldOtpDoc.newEmail
+    });
+
+    try {
+      await sendOTPEmail(oldOtpDoc.newEmail, newEmailOtp, 'email-change-new');
+      res.json({ success: true, msg: 'OTP sent to new email' });
+    } catch (emailErr) {
+      console.error('SendOTP Error:', emailErr.message);
+      res.json({ 
+        success: true, 
+        msg: 'Email service unavailable. Use this OTP:', 
+        otp: newEmailOtp,
+        devMode: true 
+      });
+    }
+  } catch (err) {
+    console.error('Verify old email error:', err.message);
+    res.status(500).json({ msg: 'Server error' });
+  }
+});
+
+// PATCH /api/auth/confirm-email-change - Step 3: Final update
+router.patch('/confirm-email-change', auth, async (req, res) => {
+  const { otp } = req.body;
+  
+  try {
+    const newOtpDoc = await OTP.findOne({ userId: req.user.id, otp, type: 'email-change-new' });
+    if (!newOtpDoc) return res.status(400).json({ msg: 'Invalid or expired OTP' });
+
+    // Check if old email was verified
+    const oldOtpDoc = await OTP.findOne({ userId: req.user.id, type: 'email-change-old' });
+    if (!oldOtpDoc) return res.status(400).json({ msg: 'Verify old email first' });
+
+    const user = await User.findByIdAndUpdate(
+      req.user.id,
+      { email: newOtpDoc.newEmail },
+      { new: true }
+    ).select('-password');
+
+    await OTP.deleteMany({ userId: req.user.id, type: { $in: ['email-change-old', 'email-change-new'] } });
+    res.json(user);
+  } catch (err) {
+    console.error('Confirm email change error:', err.message);
+    res.status(500).json({ msg: 'Server error' });
   }
 });
 
