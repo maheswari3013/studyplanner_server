@@ -59,6 +59,142 @@ router.get('/today', auth, async (req, res) => {
   }
 });
 
+// GET /api/schedule/upcoming - ADDED FOR DASHBOARD
+router.get('/upcoming', auth, async (req, res) => {
+  try {
+    const exams = await Exam.find({
+      user: req.user.id,
+      examDate: { $gte: new Date() }
+    })
+   .sort({ examDate: 1 })
+   .limit(5);
+    res.json(exams);
+  } catch (err) {
+    console.error('Upcoming exams error:', err);
+    res.status(500).json({ msg: 'Server Error' });
+  }
+});
+
+// GET /api/schedule/user/stats - ADDED FOR DASHBOARD
+router.get('/user/stats', auth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+
+    const todayBlocks = await StudyBlock.find({
+      user: userId,
+      date: today,
+      isBreak: false
+    });
+
+    const completedToday = todayBlocks.filter(b => b.completed).length;
+
+    const upcomingExams = await Exam.countDocuments({
+      user: userId,
+      examDate: { $gte: new Date(), $lte: new Date(Date.now() + 30*24*60*60*1000) }
+    });
+
+    const activeTopics = await StudyBlock.distinct('topic', {
+      user: userId,
+      completed: false,
+      isBreak: false
+    });
+
+    // Simple streak - count consecutive days with completed blocks
+    let studyStreak = 0;
+    let checkDate = new Date();
+    while (true) {
+      const dateStr = checkDate.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      const hasCompleted = await StudyBlock.exists({
+        user: userId,
+        date: dateStr,
+        completed: true,
+        isBreak: false
+      });
+      if (!hasCompleted) break;
+      studyStreak++;
+      checkDate.setDate(checkDate.getDate() - 1);
+      if (studyStreak > 365) break; // safety
+    }
+
+    res.json({
+      todayBlocks: todayBlocks.length,
+      completedToday,
+      upcomingExams,
+      totalTopics: activeTopics.length,
+      studyStreak
+    });
+  } catch (err) {
+    console.error('User stats error:', err);
+    res.status(500).json({ msg: 'Server Error' });
+  }
+});
+
+// GET /api/schedule/user/subject-progress - ADDED FOR DASHBOARD
+router.get('/user/subject-progress', auth, async (req, res) => {
+  try {
+    const subjects = await StudyBlock.aggregate([
+      { $match: { user: new mongoose.Types.ObjectId(req.user.id), isBreak: false } },
+      { $group: {
+          _id: '$subject',
+          planned: { $sum: '$duration' },
+          completed: { $sum: { $cond: ['$completed', '$duration', 0] } }
+      }}
+    ]);
+
+    const progress = subjects.map(s => ({
+      subject: s._id,
+      planned: +(s.planned / 60).toFixed(1),
+      completed: +(s.completed / 60).toFixed(1)
+    }));
+
+    res.json(progress);
+  } catch (err) {
+    console.error('Subject progress error:', err);
+    res.status(500).json({ msg: 'Server Error' });
+  }
+});
+
+// GET /api/schedule/user/study-logs - ADDED FOR DASHBOARD
+router.get('/user/study-logs', auth, async (req, res) => {
+  try {
+    const logs = await StudyBlock.aggregate([
+      { $match: { user: new mongoose.Types.ObjectId(req.user.id), isBreak: false, completed: true } },
+      { $group: {
+          _id: '$subject',
+          planned: { $sum: '$duration' },
+          actual: { $sum: { $ifNull: ['$actualDuration', '$duration'] } }
+      }}
+    ]);
+
+    const result = logs.map(l => ({
+      subject: l._id,
+      planned: +(l.planned / 60).toFixed(1),
+      actual: +(l.actual / 60).toFixed(1)
+    }));
+
+    res.json(result);
+  } catch (err) {
+    console.error('Study logs error:', err);
+    res.status(500).json({ msg: 'Server Error' });
+  }
+});
+
+// GET /api/schedule/user/confidence - ADDED FOR DASHBOARD
+router.get('/user/confidence', auth, async (req, res) => {
+  try {
+    const exams = await Exam.find({ user: req.user.id });
+    const confidenceMap = {};
+    exams.forEach(exam => {
+      confidenceMap[exam._id] = exam.confidenceLevel || 0;
+    });
+    res.json(confidenceMap);
+  } catch (err) {
+    console.error('Confidence fetch error:', err);
+    res.status(500).json({ msg: 'Server Error' });
+  }
+});
+
 // GET /api/schedule/stats
 router.get('/stats', auth, async (req, res) => {
   try {
@@ -105,7 +241,7 @@ router.get('/exams', auth, async (req, res) => {
       const totalHours = blocks.reduce((sum, b) => sum + b.duration / 60, 0);
       const completedHours = blocks.filter(b => b.completed).reduce((sum, b) => sum + b.duration / 60, 0);
       return {
-       ...exam.toObject(),
+      ...exam.toObject(),
         totalScheduledHours: Number(totalHours.toFixed(1)),
         completedHours: Number(completedHours.toFixed(1))
       };
@@ -177,10 +313,6 @@ router.get('/affirmation', auth, async (req, res) => {
   const dayIndex = new Date().getDate() % quotes.length;
   res.json({ quote: quotes[dayIndex] });
 });
-
-
-
-// ===== REST OF YOUR EXISTING ROUTES =====
 
 // GET /api/schedule/export/pdf
 router.get('/export/pdf', auth, pdfLimiter, async (req, res) => {
@@ -452,21 +584,21 @@ router.patch('/exams/:id/confidence', auth, async (req, res) => {
 // PATCH /api/schedule/:id/complete
 router.patch('/:id/complete', auth, async (req, res) => {
   try {
-    const { actualDuration } = req.body; // Frontend sends this
+    const { actualDuration } = req.body;
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(400).json({ msg: 'Invalid block ID' });
-    
+
     const block = await StudyBlock.findOneAndUpdate(
       { _id: req.params.id, user: req.user.id },
-      { 
-        completed: true, 
+      {
+        completed: true,
         missed: false,
         status: 'completed',
-        actualDuration: actualDuration || null, // Save actual time spent
+        actualDuration: actualDuration || null,
         loggedAt: new Date()
       },
       { new: true }
     );
-    
+
     if (!block) return res.status(404).json({ msg: 'Block not found' });
     res.json(block);
   } catch (err) {
