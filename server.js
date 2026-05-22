@@ -119,15 +119,15 @@ const startCronJobs = () => {
 
           const daysToSchedule = calculateDaysToSchedule(exams);
 
-          const config = {
-            startDate: new Date(),
-            startHour: 9, // Default 9-18 for cron
-            endHour: 18,
-            studyBlock: exams[0]?.breakRatio?.study || 50,
-            breakBlock: exams[0]?.breakRatio?.break || 10,
-            daysToSchedule: daysToSchedule,
-            breakRatio: exams[0]?.breakRatio || { study: 50, break: 10 }
-          };
+const config = {
+  startDate: new Date(),
+  startHour: 0, // Change from 9 to 0 for 24hr default
+  endHour: 23, // Change from 18 to 23 for 24hr default
+  studyBlock: exams[0]?.breakRatio?.study || 50,
+  breakBlock: exams[0]?.breakRatio?.break || 10,
+  daysToSchedule: daysToSchedule,
+  breakRatio: exams[0]?.breakRatio || { study: 50, break: 10 }
+};
 
           const existingBlocks = await StudyBlock.find({
             user: userId,

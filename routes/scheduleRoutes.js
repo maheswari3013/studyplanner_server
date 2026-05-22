@@ -426,7 +426,8 @@ router.get('/google/callback', async (req, res) => {
 
 router.post('/generate', auth, async (req, res) => {
   try {
-    const { exams, startHour = 9, endHour = 18, startDate } = req.body; // Default 9-18
+    const { exams, startHour = 9, endHour = 18, startDate } = req.body; 
+    
     const userId = req.user.id;
     if (!exams || exams.length === 0) return res.status(400).json({ msg: 'No exams provided' });
 
