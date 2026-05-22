@@ -386,31 +386,44 @@ router.get('/pending', auth, async (req, res) => {
 router.get('/google/auth', auth, (req, res) => {
   const oauth2Client = getOAuth2Client();
   const url = oauth2Client.generateAuthUrl({
-    access_type: 'offline',
-    prompt: 'consent',
+    access_type: 'offline', // gets refresh_token
+    prompt: 'consent',      // forces refresh_token every time
     scope: ['https://www.googleapis.com/auth/calendar.events'],
-    state: req.user.id.toString()
+    state: req.user.id
   });
-  res.json({ url });
+  res.redirect(url);
 });
 
 router.get('/google/callback', async (req, res) => {
+  // Fix COOP error
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+  res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
+  
   try {
     const { code, state } = req.query;
-    if (!code ||!state) return res.status(400).send('Missing code or state');
-    
-    console.log('Callback hit. Code:', code.substring(0,20) + '...', 'State:', state);
-    console.log('Using redirect URI:', process.env.GOOGLE_REDIRECT_URI);
+    if (!code || !state) return res.status(400).send('Missing code or state');
     
     const oauth2Client = getOAuth2Client();
     const { tokens } = await oauth2Client.getToken(code);
     
     await User.findByIdAndUpdate(state, { googleTokens: tokens });
-    res.send(`<script>window.opener.postMessage({type:"GOOGLE_AUTH_SUCCESS"}, "*"); window.close();</script><h2>Connected!</h2>`);
+    
+    res.send(`
+      <script>
+        window.opener.postMessage({type:"GOOGLE_AUTH_SUCCESS"}, "*");
+        window.close();
+      </script>
+      <h2>Connected! You can close this window.</h2>
+    `);
   } catch (err) {
     console.error('Google auth error:', err.response?.data || err.message);
-    res.status(500).send(`<h2>Auth failed</h2><p>${err.message}</p><pre>${JSON.stringify(err.response?.data, null, 2)}</pre>`);
+    res.status(500).send(`
+      <script>
+        window.opener.postMessage({type:"GOOGLE_AUTH_ERROR", error:"${err.message}"}, "*");
+        window.close();
+      </script>
+      <h2>Auth failed</h2><p>${err.message}</p>
+    `);
   }
 });
 
