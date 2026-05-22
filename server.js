@@ -122,7 +122,7 @@ const startCronJobs = () => {
           const config = {
             startDate: new Date(),
             startHour: 9,
-            endHour: 22,
+            endHour: { type: Number, default: 23, min: 1, max: 23 },
             studyBlock: exams[0]?.breakRatio?.study || 50,
             breakBlock: exams[0]?.breakRatio?.break || 10,
             daysToSchedule: daysToSchedule,

@@ -448,38 +448,67 @@ router.post('/generate', auth, async (req, res) => {
     const { exams } = req.body;
     const userId = req.user.id;
     if (!exams || exams.length === 0) return res.status(400).json({ msg: 'No exams provided' });
+
     await StudyBlock.deleteMany({ user: userId, isGenerated: true });
+
+    // Get user for default endHour fallback
+    const user = await User.findById(userId);
+
     const examDates = exams.map(e => new Date(e.examDate || e.date)).filter(d =>!isNaN(d)).sort((a, b) => a - b);
+
     let daysToSchedule = 7;
     if (examDates.length > 0) {
-      const firstExamDate = examDates[0];
       const today = new Date();
       today.setHours(0, 0, 0, 0);
-      const examDay = new Date(firstExamDate);
-      examDay.setHours(0, 0, 0, 0);
-      const dayBeforeExam = new Date(examDay);
-      dayBeforeExam.setDate(dayBeforeExam.getDate() - 1);
-      const diffTime = dayBeforeExam - today;
-      daysToSchedule = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1);
+      const firstExam = new Date(examDates[0]);
+      firstExam.setHours(0, 0, 0, 0);
+      const diffTime = firstExam - today;
+      daysToSchedule = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
     }
+
     const now = new Date();
     const currentHour = Number(now.toLocaleTimeString('en-GB', {
       timeZone: 'Asia/Kolkata',
       hour: '2-digit'
     }));
-    const config = {
-      startDate: new Date(),
-      startHour: Math.max(9, currentHour + 1),
-      endHour: 23,
-      studyBlock: 50,
-      breakBlock: 10,
-      daysToSchedule: daysToSchedule,
-      breakRatio: { study: 50, break: 10 }
-    };
-    const result = generateSchedule(exams, config, []);
-    if (result.conflicts?.length > 0) {
-      return res.status(400).json({ success: false, conflicts: result.conflicts, msg: 'Schedule conflicts detected' });
+
+    // Use endHour from first exam, or user default, or fallback to 23
+    const examEndHour = exams[0]?.endHour || user?.defaultEndHour || 23;
+    const endHour = Math.min(23, Math.max(1, examEndHour)); // Clamp 1-23
+
+    // Fix: If currentHour+1 >= endHour, roll to tomorrow 9am
+    let startHour = Math.max(9, currentHour + 1);
+    let effectiveDays = daysToSchedule;
+    let startDate = new Date();
+
+    if (startHour >= endHour) {
+      startHour = 9; // Start tomorrow at 9am
+      startDate.setDate(startDate.getDate() + 1);
+      effectiveDays = Math.max(1, daysToSchedule - 1);
     }
+
+    const config = {
+      startDate: startDate,
+      startHour: startHour,
+      endHour: endHour, // Now dynamic
+      studyBlock: exams[0]?.breakRatio?.study || 50,
+      breakBlock: exams[0]?.breakRatio?.break || 10,
+      daysToSchedule: effectiveDays,
+      breakRatio: exams[0]?.breakRatio || { study: 50, break: 10 }
+    };
+
+    const result = generateSchedule(exams, config, []);
+
+    if (result.conflicts?.length > 0) {
+      return res.status(400).json({
+        success: false,
+        conflicts: result.conflicts,
+        msg: `Not enough time: only ${effectiveDays} days, ${startHour}:00-${endHour}:00 available`,
+        count: 0,
+        warnings: result.warnings || []
+      });
+    }
+
     const blocksToSave = result.schedule.flatMap(day =>
       day.sessions.map(s => ({
         user: userId,
@@ -499,10 +528,19 @@ router.post('/generate', auth, async (req, res) => {
         missed: false
       }))
     );
+
     if (blocksToSave.length > 0) {
       await StudyBlock.insertMany(blocksToSave);
     }
-    res.json({ success: true, count: blocksToSave.length, warnings: result.warnings || [] });
+
+    res.json({
+      success: true,
+      count: blocksToSave.length,
+      warnings: result.warnings || [],
+      msg: blocksToSave.length > 0
+       ? `Generated ${blocksToSave.length} blocks, ${startHour}:00-${endHour}:00`
+        : `No blocks scheduled. Check if you have time between ${startHour}:00-${endHour}:00`
+    });
   } catch (err) {
     console.error('GENERATE ERROR:', err);
     res.status(500).json({ msg: 'Server error', error: err.message });
