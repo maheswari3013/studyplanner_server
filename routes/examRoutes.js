@@ -48,7 +48,31 @@ router.put('/:id', auth, async (req, res) => {
     res.status(500).json({ msg: 'Server error' });
   }
 });
+router.put('/:id', auth, async (req, res) => {
+  try {
+    const { examDate, ...updateData } = req.body;
+    
+    if (examDate) {
+      const selectedDate = new Date(examDate);
+      const today = new Date();
+      today.setHours(0,0,0,0);
+      if (selectedDate < today) {
+        return res.status(400).json({ msg: 'Exam date cannot be in the past' });
+      }
+    }
 
+    const exam = await Exam.findOneAndUpdate(
+      { _id: req.params.id, user: req.user.id },
+      { ...updateData, examDate },
+      { new: true, runValidators: true }
+    );
+    
+    if (!exam) return res.status(404).json({ msg: 'Exam not found' });
+    res.json(exam);
+  } catch (err) {
+    res.status(500).json({ msg: 'Server Error', error: err.message });
+  }
+});
 // DELETE /api/exams/:id - Delete exam + its study blocks
 router.delete('/:id', auth, async (req, res) => {
   try {
