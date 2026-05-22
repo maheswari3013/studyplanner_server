@@ -13,7 +13,6 @@ const PDFDocument = require('pdfkit');
 const pdfLimiter = rateLimit({ windowMs: 60 * 1000, max: 5, message: { msg: 'Too many PDF exports. Try again in 1 minute.' } });
 const syncLimiter = rateLimit({ windowMs: 60 * 1000, max: 3, message: { msg: 'Too many syncs. Try again in 1 minute.' } });
 
-// Helper: Convert IST "HH:MM" to UTC "HH:MM" for cron
 const istToUtc = (timeStr) => {
   const [h, m] = timeStr.split(':').map(Number);
   let utcH = h - 5;
@@ -31,7 +30,6 @@ const getOAuth2Client = () => new google.auth.OAuth2(
 
 // ===== STATIC GET ROUTES FIRST =====
 
-// GET /api/schedule - Get all blocks
 router.get('/', auth, async (req, res) => {
   try {
     const blocks = await StudyBlock.find({ user: req.user.id }).sort({ date: 1, time: 1 });
@@ -42,7 +40,6 @@ router.get('/', auth, async (req, res) => {
   }
 });
 
-// GET /api/schedule/today
 router.get('/today', auth, async (req, res) => {
   try {
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
@@ -59,15 +56,14 @@ router.get('/today', auth, async (req, res) => {
   }
 });
 
-// GET /api/schedule/upcoming
 router.get('/upcoming', auth, async (req, res) => {
   try {
     const exams = await Exam.find({
       user: req.user.id,
       examDate: { $gte: new Date() }
     })
- .sort({ examDate: 1 })
- .limit(5);
+.sort({ examDate: 1 })
+.limit(5);
     res.json(exams);
   } catch (err) {
     console.error('Upcoming exams error:', err);
@@ -75,7 +71,6 @@ router.get('/upcoming', auth, async (req, res) => {
   }
 });
 
-// GET /api/schedule/user/stats
 router.get('/user/stats', auth, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -129,7 +124,6 @@ router.get('/user/stats', auth, async (req, res) => {
   }
 });
 
-// GET /api/schedule/user/subject-progress
 router.get('/user/subject-progress', auth, async (req, res) => {
   try {
     const subjects = await StudyBlock.aggregate([
@@ -154,7 +148,6 @@ router.get('/user/subject-progress', auth, async (req, res) => {
   }
 });
 
-// GET /api/schedule/user/study-logs
 router.get('/user/study-logs', auth, async (req, res) => {
   try {
     const logs = await StudyBlock.aggregate([
@@ -179,7 +172,6 @@ router.get('/user/study-logs', auth, async (req, res) => {
   }
 });
 
-// GET /api/schedule/user/confidence
 router.get('/user/confidence', auth, async (req, res) => {
   try {
     const exams = await Exam.find({ user: req.user.id });
@@ -194,7 +186,6 @@ router.get('/user/confidence', auth, async (req, res) => {
   }
 });
 
-// GET /api/schedule/stats
 router.get('/stats', auth, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -230,7 +221,6 @@ router.get('/stats', auth, async (req, res) => {
   }
 });
 
-// GET /api/schedule/exams
 router.get('/exams', auth, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -240,7 +230,7 @@ router.get('/exams', auth, async (req, res) => {
       const totalHours = blocks.reduce((sum, b) => sum + b.duration / 60, 0);
       const completedHours = blocks.filter(b => b.completed).reduce((sum, b) => sum + b.duration / 60, 0);
       return {
-      ...exam.toObject(),
+    ...exam.toObject(),
         totalScheduledHours: Number(totalHours.toFixed(1)),
         completedHours: Number(completedHours.toFixed(1))
       };
@@ -251,7 +241,6 @@ router.get('/exams', auth, async (req, res) => {
   }
 });
 
-// GET /api/schedule/progress
 router.get('/progress', auth, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -272,7 +261,6 @@ router.get('/progress', auth, async (req, res) => {
   }
 });
 
-// GET /api/schedule/readiness
 router.get('/readiness', auth, async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
@@ -301,7 +289,6 @@ router.get('/readiness', auth, async (req, res) => {
   }
 });
 
-// GET /api/schedule/affirmation
 router.get('/affirmation', auth, async (req, res) => {
   const quotes = [
     "Progress, not perfection.", "Small steps every day lead to big results.",
@@ -313,7 +300,6 @@ router.get('/affirmation', auth, async (req, res) => {
   res.json({ quote: quotes[dayIndex] });
 });
 
-// GET /api/schedule/export/pdf
 router.get('/export/pdf', auth, pdfLimiter, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -356,7 +342,6 @@ router.get('/export/pdf', auth, pdfLimiter, async (req, res) => {
   }
 });
 
-// GET /api/schedule/export
 router.get('/export', auth, async (req, res) => {
   try {
     const blocks = await StudyBlock.find({ user: req.user.id, isBreak: false }).sort({ date: 1, time: 1 });
@@ -366,7 +351,6 @@ router.get('/export', auth, async (req, res) => {
   }
 });
 
-// GET /api/schedule/pending
 router.get('/pending', auth, async (req, res) => {
   try {
     const blocks = await StudyBlock.find({
@@ -384,7 +368,6 @@ router.get('/pending', auth, async (req, res) => {
 
 // ===== GOOGLE CALENDAR ROUTES =====
 
-// GET /api/schedule/google/status - NEW: Check if connected
 router.get('/google/status', auth, async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
@@ -396,20 +379,18 @@ router.get('/google/status', auth, async (req, res) => {
   }
 });
 
-// GET /api/schedule/google/auth
 router.get('/google/auth', auth, (req, res) => {
   const oauth2Client = getOAuth2Client();
   const url = oauth2Client.generateAuthUrl({
     access_type: 'offline',
-    prompt: 'consent', // Forces refresh_token
+    prompt: 'consent',
     scope: ['https://www.googleapis.com/auth/calendar.events'],
     state: req.user.id
   });
-  res.json({ url }); // Return JSON, not redirect, so frontend can open popup
+  res.json({ url });
 });
 
 router.get('/google/callback', async (req, res) => {
-  // Fix COOP error
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
   res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
 
@@ -445,52 +426,58 @@ router.get('/google/callback', async (req, res) => {
 
 router.post('/generate', auth, async (req, res) => {
   try {
-    const { exams } = req.body;
+    const { exams, startHour = 9, endHour = 18, startDate } = req.body; // Default 9-18
     const userId = req.user.id;
     if (!exams || exams.length === 0) return res.status(400).json({ msg: 'No exams provided' });
 
     await StudyBlock.deleteMany({ user: userId, isGenerated: true });
 
-    // Get user for default endHour fallback
-    const user = await User.findById(userId);
-
     const examDates = exams.map(e => new Date(e.examDate || e.date)).filter(d =>!isNaN(d)).sort((a, b) => a - b);
+
+    const baseDate = startDate? new Date(startDate) : new Date();
+    baseDate.setHours(0, 0, 0, 0);
 
     let daysToSchedule = 7;
     if (examDates.length > 0) {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
       const firstExam = new Date(examDates[0]);
       firstExam.setHours(0, 0, 0, 0);
-      const diffTime = firstExam - today;
+      const diffTime = firstExam - baseDate;
       daysToSchedule = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
     }
 
     const now = new Date();
+    const todayStr = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const baseDateStr = baseDate.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const isToday = todayStr === baseDateStr;
+
     const currentHour = Number(now.toLocaleTimeString('en-GB', {
       timeZone: 'Asia/Kolkata',
       hour: '2-digit'
     }));
 
-    // Use endHour from first exam, or user default, or fallback to 23
-    const examEndHour = exams[0]?.endHour || user?.defaultEndHour || 23;
-    const endHour = Math.min(23, Math.max(1, examEndHour)); // Clamp 1-23
-
-    // Fix: If currentHour+1 >= endHour, roll to tomorrow 9am
-    let startHour = Math.max(9, currentHour + 1);
+    let effectiveStartHour = startHour;
+    let effectiveEndHour = endHour;
     let effectiveDays = daysToSchedule;
-    let startDate = new Date();
+    let actualStartDate = new Date(baseDate);
 
-    if (startHour >= endHour) {
-      startHour = 9; // Start tomorrow at 9am
-      startDate.setDate(startDate.getDate() + 1);
-      effectiveDays = Math.max(1, daysToSchedule - 1);
+    // Handle overnight windows: e.g. 22:00 - 06:00
+    const isOvernight = startHour > endHour;
+    if (isOvernight) effectiveEndHour = endHour + 24;
+
+    if (isToday) {
+      effectiveStartHour = Math.max(startHour, currentHour + 1);
+      // If we've passed the window for today, roll to tomorrow
+      if (!isOvernight && effectiveStartHour >= endHour) {
+        effectiveStartHour = startHour;
+        actualStartDate.setDate(actualStartDate.getDate() + 1);
+        effectiveDays = Math.max(1, daysToSchedule - 1);
+      }
     }
 
     const config = {
-      startDate: startDate,
-      startHour: startHour,
-      endHour: endHour, // Now dynamic
+      startDate: actualStartDate,
+      startHour: effectiveStartHour,
+      endHour: isOvernight? effectiveEndHour : endHour,
       studyBlock: exams[0]?.breakRatio?.study || 50,
       breakBlock: exams[0]?.breakRatio?.break || 10,
       daysToSchedule: effectiveDays,
@@ -503,7 +490,7 @@ router.post('/generate', auth, async (req, res) => {
       return res.status(400).json({
         success: false,
         conflicts: result.conflicts,
-        msg: `Not enough time: only ${effectiveDays} days, ${startHour}:00-${endHour}:00 available`,
+        msg: `Not enough time: ${effectiveDays} days, ${effectiveStartHour}:00-${endHour}:00`,
         count: 0,
         warnings: result.warnings || []
       });
@@ -538,8 +525,8 @@ router.post('/generate', auth, async (req, res) => {
       count: blocksToSave.length,
       warnings: result.warnings || [],
       msg: blocksToSave.length > 0
-       ? `Generated ${blocksToSave.length} blocks, ${startHour}:00-${endHour}:00`
-        : `No blocks scheduled. Check if you have time between ${startHour}:00-${endHour}:00`
+     ? `Generated ${blocksToSave.length} blocks, ${effectiveStartHour}:00-${endHour}:00`
+        : `No blocks scheduled for ${actualStartDate.toDateString()} ${effectiveStartHour}:00-${endHour}:00`
     });
   } catch (err) {
     console.error('GENERATE ERROR:', err);
@@ -547,7 +534,6 @@ router.post('/generate', auth, async (req, res) => {
   }
 });
 
-// POST /api/schedule/google/sync
 router.post('/google/sync', auth, syncLimiter, async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
@@ -588,7 +574,6 @@ router.post('/google/sync', auth, syncLimiter, async (req, res) => {
   }
 });
 
-// DELETE /api/schedule/clear-all
 router.delete('/clear-all', auth, async (req, res) => {
   try {
     const result = await StudyBlock.deleteMany({ user: req.user.id });
@@ -598,13 +583,11 @@ router.delete('/clear-all', auth, async (req, res) => {
   }
 });
 
-// DELETE /api/schedule/google/disconnect
 router.delete('/google/disconnect', auth, async (req, res) => {
   await User.findByIdAndUpdate(req.user.id, { $unset: { googleTokens: 1 } });
   res.json({ msg: 'Google Calendar disconnected' });
 });
 
-// PATCH /api/schedule/user/confidence
 router.patch('/user/confidence', auth, async (req, res) => {
   try {
     const { subject, level } = req.body;
@@ -619,7 +602,6 @@ router.patch('/user/confidence', auth, async (req, res) => {
   }
 });
 
-// PATCH /api/exams/:id/confidence
 router.patch('/exams/:id/confidence', auth, async (req, res) => {
   try {
     const { level } = req.body;
@@ -639,7 +621,6 @@ router.patch('/exams/:id/confidence', auth, async (req, res) => {
 
 // ===== PARAMETERIZED ROUTES LAST =====
 
-// PATCH /api/schedule/:id/complete
 router.patch('/:id/complete', auth, async (req, res) => {
   try {
     const { actualDuration } = req.body;
@@ -665,7 +646,6 @@ router.patch('/:id/complete', auth, async (req, res) => {
   }
 });
 
-// PATCH /api/schedule/:id/missed
 router.patch('/:id/missed', auth, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -729,7 +709,6 @@ router.patch('/:id/missed', auth, async (req, res) => {
   }
 });
 
-// POST /api/schedule/:id/start
 router.post('/:id/start', auth, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -772,7 +751,6 @@ router.post('/:id/start', auth, async (req, res) => {
   }
 });
 
-// PATCH /api/schedule/:id/pending
 router.patch('/:id/pending', auth, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(400).json({ msg: 'Invalid block ID' });
@@ -789,7 +767,6 @@ router.patch('/:id/pending', auth, async (req, res) => {
   }
 });
 
-// PATCH /api/schedule/:id
 router.patch('/:id', auth, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(400).json({ msg: 'Invalid block ID' });
@@ -812,7 +789,6 @@ router.patch('/:id', auth, async (req, res) => {
   }
 });
 
-// DELETE /api/schedule/:id
 router.delete('/:id', auth, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(400).json({ msg: 'Invalid block ID' });

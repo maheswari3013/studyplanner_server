@@ -1,5 +1,5 @@
 const SPACED_INTERVALS = [1, 3, 7, 14];
-const MIN_BLOCK_HOURS = 0.833; // Changed from 0.5 to allow 25min blocks
+const MIN_BLOCK_HOURS = 0.417; // 25 min blocks allowed for 24hr mode
 const DAY_NAMES = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 const DEFAULT_BASE_HOURS_PER_TOPIC = 10;
 
@@ -14,12 +14,12 @@ const normalizeTopics = (exam) => {
     return exam.syllabusTopics.map(t => ({
       name: t.name.trim(),
       hours: t.hours > 0? t.hours : DEFAULT_BASE_HOURS_PER_TOPIC,
-      missedHours: t.missedHours || 0 // ADD THIS
+      missedHours: t.missedHours || 0
     }));
   }
   if (exam.totalHours >= 0) {
     const topicNames = exam.syllabusTopics?.length > 0
-    ? exam.syllabusTopics.filter(t => typeof t === 'string' && t.trim())
+  ? exam.syllabusTopics.filter(t => typeof t === 'string' && t.trim())
       : ['General'];
     const hoursPerTopic = exam.totalHours / topicNames.length;
     return topicNames.map(name => ({ name: name.trim(), hours: hoursPerTopic, missedHours: 0 }));
@@ -44,11 +44,28 @@ const isTimeOccupied = (date, startTime, duration, existingBlocks) => {
   const endMin = startMin + duration;
   return existingBlocks.some(b => {
     if (b.date!== date) return false;
-    if (b.status === 'missed' || b.status === 'overdue') return false; // Don't block overdue/missed
+    if (b.status === 'missed' || b.status === 'overdue') return false;
     const bStart = timeToMinutes(b.time);
     const bEnd = bStart + b.duration;
     return startMin < bEnd && endMin > bStart;
   });
+};
+
+// Handle overnight windows: 22:00-06:00 means 22,23,0,1,2,3,4,5
+const getMinutesInWindow = (startHour, endHour) => {
+  if (startHour <= endHour) {
+    return (endHour - startHour) * 60;
+  }
+  // Overnight: e.g. 22 to 6 = (24-22) + 6 = 8 hours
+  return ((24 - startHour) + endHour) * 60;
+};
+
+const addMinutesToTime = (timeStr, minutes) => {
+  let totalMins = timeToMinutes(timeStr) + minutes;
+  totalMins = totalMins % 1440; // Wrap around 24h
+  const h = Math.floor(totalMins / 60);
+  const m = totalMins % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 };
 
 function generateSchedule(exams, config, existingBlocks = []) {
@@ -67,7 +84,7 @@ function generateSchedule(exams, config, existingBlocks = []) {
   let currentDate = new Date(startDateObj);
   let dayCount = 0;
 
-  console.log(`[Scheduler] Start: ${startDateStr}, End: ${toISTDateString(lastExamDate)}, Days: ${daysToSchedule}`);
+  console.log(`[Scheduler] Start: ${startDateStr}, End: ${toISTDateString(lastExamDate)}, Days: ${daysToSchedule}, Window: ${startHour}-${endHour}`);
 
   while (currentDate <= lastExamDate && dayCount < daysToSchedule) {
     const dateStr = toISTDateString(currentDate);
@@ -130,15 +147,15 @@ function generateSchedule(exams, config, existingBlocks = []) {
     const examDate = new Date(exam.examDate || exam.date);
     const daysBeforeExam = availableDays.filter(d => new Date(d.date) < examDate && d.examCaps[examId]).length;
     const availableHoursValues = Object.values(exam.availableHours || {});
-    const maxDailyHours = availableHoursValues.length > 0? Math.max(...availableHoursValues) : (endHour - startHour);
+    const maxDailyHours = availableHoursValues.length > 0? Math.max(...availableHoursValues) : (getMinutesInWindow(startHour, endHour) / 60);
     const maxPossibleHours = daysBeforeExam * maxDailyHours;
 
     console.log(`[Scheduler] Exam ${exam.subject}: daysBeforeExam=${daysBeforeExam}, maxDailyHours=${maxDailyHours}, maxPossible=${maxPossibleHours}`);
 
     topicsList.forEach(topic => {
       const baseHours = topic.hours * difficultyMultiplier * knowledgeMultiplier;
-      const missedHours = topic.missedHours || 0; // ADD THIS
-      const adjustedHoursPerTopic = baseHours + missedHours; // ADD MISSED HOURS
+      const missedHours = topic.missedHours || 0;
+      const adjustedHoursPerTopic = baseHours + missedHours;
 
       console.log(`[Scheduler] Topic ${topic.name}: base=${baseHours.toFixed(1)}h, missed=${missedHours.toFixed(1)}h, total=${adjustedHoursPerTopic.toFixed(1)}h`);
 
@@ -167,7 +184,7 @@ function generateSchedule(exams, config, existingBlocks = []) {
         userPriority: exam.priority || 3,
         daysUntilExam: Math.ceil((examDate - new Date(startDateStr)) / (1000 * 60 * 60 * 24)),
         breakRatio: exam.breakRatio || { study: 50, break: 10 },
-        missedHours: missedHours // TRACK THIS
+        missedHours: missedHours
       });
     });
   });
@@ -197,13 +214,16 @@ function generateSchedule(exams, config, existingBlocks = []) {
     return b.hoursRemaining - a.hoursRemaining;
   });
 
+  const isOvernight = startHour > endHour;
+  const windowEndMinutes = isOvernight? (endHour + 24) * 60 : endHour * 60;
+
   for (const topic of sortedTopics) {
     let hoursToSchedule = topic.hoursRemaining;
     console.log(`[Scheduler] Scheduling topic: ${topic.topicName}, hours: ${hoursToSchedule.toFixed(1)}`);
 
     for (const day of availableDays) {
       if (hoursToSchedule <= 0) break;
-      if (new Date(day.date) > new Date(topic.examDate)) continue; // FIX: > not >=
+      if (new Date(day.date) > new Date(topic.examDate)) continue;
 
       const examCap = day.examCaps[topic.examId];
       if (!examCap) continue;
@@ -219,13 +239,21 @@ function generateSchedule(exams, config, existingBlocks = []) {
       let currentMinutes = startHour * 60 + day.usedHours * 60;
 
       while (hoursToSchedule >= MIN_BLOCK_HOURS && examDayRemaining >= MIN_BLOCK_HOURS) {
-        if (currentMinutes + studyMinutes > endHour * 60) break;
+        let currentMinutesNormalized = currentMinutes % 1440;
+        if (isOvernight) {
+          if (currentMinutes >= 1440 && currentMinutesNormalized >= endHour * 60) break;
+          if (currentMinutes < 1440 && currentMinutes >= windowEndMinutes) break;
+        } else {
+          if (currentMinutes + studyMinutes > endHour * 60) break;
+        }
 
         const actualStudyHours = Math.min(blockHours, hoursToSchedule, examDayRemaining);
         const actualStudyMinutes = Math.round(actualStudyHours * 60);
         if (actualStudyMinutes < MIN_BLOCK_HOURS * 60) break;
 
-        const startTime = `${String(Math.floor(currentMinutes / 60)).padStart(2, '0')}:${String(Math.round(currentMinutes % 60)).padStart(2, '0')}`;
+        const h = Math.floor(currentMinutesNormalized / 60);
+        const m = Math.round(currentMinutesNormalized % 60);
+        const startTime = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 
         if (isTimeOccupied(day.date, startTime, actualStudyMinutes, existingBlocks)) {
           currentMinutes += 10;
@@ -253,36 +281,50 @@ function generateSchedule(exams, config, existingBlocks = []) {
         hoursToSchedule -= actualStudyHours;
         examDayRemaining -= actualStudyHours;
 
-        const canAddBreak = currentMinutes + breakMinutes <= endHour * 60 && examDayRemaining > 0.01 && hoursToSchedule > 0;
+        const canAddBreak = examDayRemaining > 0.01 && hoursToSchedule > 0;
         if (canAddBreak) {
-          const breakStartTime = `${String(Math.floor(currentMinutes / 60)).padStart(2, '0')}:${String(Math.round(currentMinutes % 60)).padStart(2, '0')}`;
-          if (!isTimeOccupied(day.date, breakStartTime, breakMinutes, existingBlocks)) {
-            day.sessions.push({
-              type: 'Break',
-              examId: topic.examId,
-              examName: topic.examName,
-              color: '#10B981',
-              topicName: 'Break',
-              hours: breakHours,
-              date: day.date,
-              startTime: breakStartTime,
-              duration: breakMinutes,
-              isBreak: true,
-              isGenerated: true
-            });
-            const actualBreakHours = Math.min(breakHours, examDayRemaining);
-            examCap.used += actualBreakHours;
-            day.usedHours += actualBreakHours;
-            examDayRemaining -= actualBreakHours;
+          let breakEndMinutes = currentMinutes + breakMinutes;
+          let canFitBreak = false;
+          if (isOvernight) {
+            canFitBreak = breakEndMinutes <= windowEndMinutes;
+          } else {
+            canFitBreak = breakEndMinutes <= endHour * 60;
           }
-          currentMinutes += breakMinutes;
+
+          if (canFitBreak) {
+            const bh = Math.floor((currentMinutes % 1440) / 60);
+            const bm = Math.round((currentMinutes % 1440) % 60);
+            const breakStartTime = `${String(bh).padStart(2, '0')}:${String(bm).padStart(2, '0')}`;
+            if (!isTimeOccupied(day.date, breakStartTime, breakMinutes, existingBlocks)) {
+              day.sessions.push({
+                type: 'Break',
+                examId: topic.examId,
+                examName: topic.examName,
+                color: '#10B981',
+                topicName: 'Break',
+                hours: breakHours,
+                date: day.date,
+                startTime: breakStartTime,
+                duration: breakMinutes,
+                isBreak: true,
+                isGenerated: true
+              });
+              const actualBreakHours = Math.min(breakHours, examDayRemaining);
+              examCap.used += actualBreakHours;
+              day.usedHours += actualBreakHours;
+              examDayRemaining -= actualBreakHours;
+            }
+            currentMinutes += breakMinutes;
+          } else {
+            break;
+          }
         } else {
           break;
         }
       }
     }
 
-    topic.missedHours = hoursToSchedule; // Save unscheduled time
+    topic.missedHours = hoursToSchedule;
     if (hoursToSchedule <= 0) topic.missedHours = 0;
 
     if (hoursToSchedule > 0.1) {
@@ -297,7 +339,11 @@ function generateSchedule(exams, config, existingBlocks = []) {
 
   result.schedule = availableDays.map(day => ({
     date: day.date,
-    sessions: day.sessions.sort((a, b) => a.startTime.localeCompare(b.startTime))
+    sessions: day.sessions.sort((a, b) => {
+      const aMins = timeToMinutes(a.startTime);
+      const bMins = timeToMinutes(b.startTime);
+      return aMins - bMins;
+    })
   }));
 
   const totalBlocks = result.schedule.reduce((sum, day) => sum + day.sessions.length, 0);

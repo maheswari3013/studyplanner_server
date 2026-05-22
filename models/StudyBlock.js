@@ -20,15 +20,15 @@ const StudyBlockSchema = new mongoose.Schema({
     required: true
   },
   date: {
-    type: String, // "2026-05-20" - STRING not Date
+    type: String, 
     required: true
   },
   time: {
-    type: String, // "09:50" IST for UI display
+    type: String, 
     required: true
   },
   startTime: {
-    type: String, // "04:20" UTC for cron - ONLY ONE startTime
+    type: String, 
     required: true
   },
   duration: {

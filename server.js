@@ -45,7 +45,7 @@ const istToUtc = (timeStr) => {
 
 const calculateDaysToSchedule = (exams) => {
   if (!exams || exams.length === 0) return 1;
-  const examDates = exams.map(e => new Date(e.examDate || e.date)).filter(d => !isNaN(d)).sort((a, b) => a - b);
+  const examDates = exams.map(e => new Date(e.examDate || e.date)).filter(d =>!isNaN(d)).sort((a, b) => a - b);
   if (examDates.length === 0) return 7;
   const firstExamDate = examDates[0];
   const today = new Date();
@@ -121,8 +121,8 @@ const startCronJobs = () => {
 
           const config = {
             startDate: new Date(),
-            startHour: 9,
-            endHour: { type: Number, default: 23, min: 1, max: 23 },
+            startHour: 9, // Default 9-18 for cron
+            endHour: 18,
             studyBlock: exams[0]?.breakRatio?.study || 50,
             breakBlock: exams[0]?.breakRatio?.break || 10,
             daysToSchedule: daysToSchedule,
@@ -183,7 +183,7 @@ const startCronJobs = () => {
 // ===== ROUTES =====
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/exams', require('./routes/examRoutes'));
-app.use('/api/schedule', require('./routes/scheduleRoutes')); // Make sure file is named scheduleRoutes.js
+app.use('/api/schedule', require('./routes/scheduleRoutes'));
 app.use('/api/user', require('./routes/user'));
 app.use('/api/admin', require('./routes/adminRoutes'));
 app.use('/api/notifications', require('./routes/notificationRoutes'));
@@ -200,7 +200,7 @@ app.use(errorHandler);
 const PORT = process.env.PORT || 5000;
 
 connectDB()
- .then(() => {
+.then(() => {
     console.log('MongoDB connected successfully');
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
@@ -208,7 +208,7 @@ connectDB()
       require('./utils/reminderScheduler');
     });
   })
- .catch((err) => {
+.catch((err) => {
     console.error('MongoDB connection failed:', err.message);
     process.exit(1);
   });
