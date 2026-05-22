@@ -19,7 +19,7 @@ const normalizeTopics = (exam) => {
   }
   if (exam.totalHours >= 0) {
     const topicNames = exam.syllabusTopics?.length > 0
-  ? exam.syllabusTopics.filter(t => typeof t === 'string' && t.trim())
+     ? exam.syllabusTopics.filter(t => typeof t === 'string' && t.trim())
       : ['General'];
     const hoursPerTopic = exam.totalHours / topicNames.length;
     return topicNames.map(name => ({ name: name.trim(), hours: hoursPerTopic, missedHours: 0 }));
@@ -60,10 +60,15 @@ const getMinutesInWindow = (startHour, endHour) => {
   return ((24 - startHour) + endHour) * 60;
 };
 
-const addMinutesToTime = (timeStr, minutes) => {
+const addMinutesToTime = (timeStr, minutes, endHour = 24) => {
   let totalMins = timeToMinutes(timeStr) + minutes;
-  totalMins = totalMins % 1440; // Wrap around 24h
-  const h = Math.floor(totalMins / 60);
+
+  // For overnight, endHour can be > 24 like 30 for 6am next day
+  if (totalMins >= endHour * 60) {
+    return null;
+  }
+
+  const h = Math.floor(totalMins / 60) % 24; // Use %24 only for display, not logic
   const m = totalMins % 60;
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 };
@@ -215,7 +220,7 @@ function generateSchedule(exams, config, existingBlocks = []) {
   });
 
   const isOvernight = startHour > endHour;
-  const windowEndMinutes = isOvernight? (endHour + 24) * 60 : endHour * 60;
+  const effectiveEndHour = isOvernight? endHour + 24 : endHour;
 
   for (const topic of sortedTopics) {
     let hoursToSchedule = topic.hoursRemaining;
@@ -236,27 +241,20 @@ function generateSchedule(exams, config, existingBlocks = []) {
       const blockHours = studyMinutes / 60;
       const breakHours = breakMinutes / 60;
 
-      let currentMinutes = startHour * 60 + day.usedHours * 60;
+      let currentTime = `${String(startHour).padStart(2, '0')}:00`;
 
       while (hoursToSchedule >= MIN_BLOCK_HOURS && examDayRemaining >= MIN_BLOCK_HOURS) {
-        let currentMinutesNormalized = currentMinutes % 1440;
-        if (isOvernight) {
-          if (currentMinutes >= 1440 && currentMinutesNormalized >= endHour * 60) break;
-          if (currentMinutes < 1440 && currentMinutes >= windowEndMinutes) break;
-        } else {
-          if (currentMinutes + studyMinutes > endHour * 60) break;
-        }
+        // Calculate study end time - stop if null
+        const studyEndTime = addMinutesToTime(currentTime, studyMinutes, effectiveEndHour);
+        if (!studyEndTime) break; // Hit end of day
 
         const actualStudyHours = Math.min(blockHours, hoursToSchedule, examDayRemaining);
         const actualStudyMinutes = Math.round(actualStudyHours * 60);
         if (actualStudyMinutes < MIN_BLOCK_HOURS * 60) break;
 
-        const h = Math.floor(currentMinutesNormalized / 60);
-        const m = Math.round(currentMinutesNormalized % 60);
-        const startTime = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-
-        if (isTimeOccupied(day.date, startTime, actualStudyMinutes, existingBlocks)) {
-          currentMinutes += 10;
+        if (isTimeOccupied(day.date, currentTime, actualStudyMinutes, existingBlocks)) {
+          currentTime = addMinutesToTime(currentTime, 10, effectiveEndHour);
+          if (!currentTime) break;
           continue;
         }
 
@@ -269,55 +267,44 @@ function generateSchedule(exams, config, existingBlocks = []) {
           hours: actualStudyHours,
           priority: topic.userPriority,
           date: day.date,
-          startTime,
+          startTime: currentTime,
           duration: actualStudyMinutes,
           isBreak: false,
           isGenerated: true
         });
 
-        currentMinutes += actualStudyMinutes;
         examCap.used += actualStudyHours;
         day.usedHours += actualStudyHours;
         hoursToSchedule -= actualStudyHours;
         examDayRemaining -= actualStudyHours;
+        currentTime = studyEndTime;
 
+        // Add break if there's time and hours left
         const canAddBreak = examDayRemaining > 0.01 && hoursToSchedule > 0;
         if (canAddBreak) {
-          let breakEndMinutes = currentMinutes + breakMinutes;
-          let canFitBreak = false;
-          if (isOvernight) {
-            canFitBreak = breakEndMinutes <= windowEndMinutes;
-          } else {
-            canFitBreak = breakEndMinutes <= endHour * 60;
-          }
+          const breakEndTime = addMinutesToTime(currentTime, breakMinutes, effectiveEndHour);
+          if (!breakEndTime) break; // Can't fit break
 
-          if (canFitBreak) {
-            const bh = Math.floor((currentMinutes % 1440) / 60);
-            const bm = Math.round((currentMinutes % 1440) % 60);
-            const breakStartTime = `${String(bh).padStart(2, '0')}:${String(bm).padStart(2, '0')}`;
-            if (!isTimeOccupied(day.date, breakStartTime, breakMinutes, existingBlocks)) {
-              day.sessions.push({
-                type: 'Break',
-                examId: topic.examId,
-                examName: topic.examName,
-                color: '#10B981',
-                topicName: 'Break',
-                hours: breakHours,
-                date: day.date,
-                startTime: breakStartTime,
-                duration: breakMinutes,
-                isBreak: true,
-                isGenerated: true
-              });
-              const actualBreakHours = Math.min(breakHours, examDayRemaining);
-              examCap.used += actualBreakHours;
-              day.usedHours += actualBreakHours;
-              examDayRemaining -= actualBreakHours;
-            }
-            currentMinutes += breakMinutes;
-          } else {
-            break;
+          if (!isTimeOccupied(day.date, currentTime, breakMinutes, existingBlocks)) {
+            day.sessions.push({
+              type: 'Break',
+              examId: topic.examId,
+              examName: topic.examName,
+              color: '#10B981',
+              topicName: 'Break',
+              hours: breakHours,
+              date: day.date,
+              startTime: currentTime,
+              duration: breakMinutes,
+              isBreak: true,
+              isGenerated: true
+            });
+            const actualBreakHours = Math.min(breakHours, examDayRemaining);
+            examCap.used += actualBreakHours;
+            day.usedHours += actualBreakHours;
+            examDayRemaining -= actualBreakHours;
           }
+          currentTime = breakEndTime;
         } else {
           break;
         }
@@ -342,6 +329,12 @@ function generateSchedule(exams, config, existingBlocks = []) {
     sessions: day.sessions.sort((a, b) => {
       const aMins = timeToMinutes(a.startTime);
       const bMins = timeToMinutes(b.startTime);
+      // Handle overnight sorting: 23:00 should come before 01:00 if overnight
+      if (isOvernight) {
+        const aAdjusted = aMins < startHour * 60? aMins + 1440 : aMins;
+        const bAdjusted = bMins < startHour * 60? bMins + 1440 : bMins;
+        return aAdjusted - bAdjusted;
+      }
       return aMins - bMins;
     })
   }));

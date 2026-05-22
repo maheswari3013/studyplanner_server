@@ -67,16 +67,23 @@ const StudyBlockSchema = new mongoose.Schema({
     ref: 'StudyBlock'
   },
   status: {
-  type: String,
-  enum: ['scheduled', 'completed', 'missed', 'overdue'],
-  default: 'scheduled'
-},
+    type: String,
+    enum: ['scheduled', 'completed', 'missed', 'overdue'],
+    default: 'scheduled'
+  },
   actualDuration: { type: Number, default: 0 },
-  loggedAt: Date
+  loggedAt: Date,
+  
+  // ADD THESE 3 FIELDS
+  notifiedOverdue: { type: Boolean, default: false },
+  completedAt: Date,
+  missedAt: Date
+  
 }, { timestamps: true });
 
 StudyBlockSchema.index({ user: 1, date: 1 });
 StudyBlockSchema.index({ user: 1, subject: 1, date: 1 });
 StudyBlockSchema.index({ date: 1, startTime: 1 });
+StudyBlockSchema.index({ date: 1, notifiedOverdue: 1, completed: 1, missed: 1 }); // ADD THIS INDEX FOR CRON
 
 module.exports = mongoose.model('StudyBlock', StudyBlockSchema);

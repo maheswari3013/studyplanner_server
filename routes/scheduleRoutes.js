@@ -45,9 +45,8 @@ router.get('/today', auth, async (req, res) => {
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
     const blocks = await StudyBlock.find({
       user: req.user.id,
-      date: today,
-      completed: false,
-      missed: false
+      date: today
+      // REMOVED: completed: false, missed: false 
     }).sort({ time: 1 });
     res.json(blocks);
   } catch (err) {
@@ -620,93 +619,59 @@ router.patch('/exams/:id/confidence', auth, async (req, res) => {
   }
 });
 
+
 // ===== PARAMETERIZED ROUTES LAST =====
 
 router.patch('/:id/complete', auth, async (req, res) => {
   try {
-    const { actualDuration } = req.body;
-    if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(400).json({ msg: 'Invalid block ID' });
-
+    console.log('Completing block:', req.params.id); // ADD THIS
+    
     const block = await StudyBlock.findOneAndUpdate(
-      { _id: req.params.id, user: req.user.id },
-      {
-        completed: true,
-        missed: false,
-        status: 'completed',
-        actualDuration: actualDuration || null,
-        loggedAt: new Date()
-      },
+      { _id: req.params.id, user: req.user._id },
+      { completed: true, missed: false, completedAt: new Date() },
       { new: true }
     );
-
-    if (!block) return res.status(404).json({ msg: 'Block not found' });
+    
+    if (!block) {
+      console.log('Block not found'); 
+      return res.status(404).json({ msg: 'Block not found' });
+    }
+    
+    console.log('Block completed:', block._id); 
     res.json(block);
+    
   } catch (err) {
-    console.error('Complete error:', err);
-    res.status(500).json({ msg: 'Server Error' });
+    console.error('Complete route error:', err); 
+    res.status(500).json({ msg: err.message });
   }
 });
 
 router.patch('/:id/missed', auth, async (req, res) => {
   try {
-    const userId = req.user.id;
-    const blockId = req.params.id;
-    if (!mongoose.Types.ObjectId.isValid(blockId)) return res.status(400).json({ msg: 'Invalid block ID' });
-    const missedBlock = await StudyBlock.findOne({ _id: blockId, user: userId });
-    if (!missedBlock) return res.status(404).json({ msg: 'Block not found' });
-    if (missedBlock.isBreak) return res.status(400).json({ success: false, msg: 'Breaks cannot be marked as missed' });
-    if (missedBlock.status === 'missed') return res.status(400).json({ success: false, msg: 'Already marked as missed' });
-    missedBlock.status = 'missed';
-    await missedBlock.save();
-    const exam = await Exam.findOne({ user: userId, subject: missedBlock.subject });
-    if (!exam) return res.status(404).json({ msg: 'Exam not found' });
-    const topic = exam.syllabusTopics.find(t => t.name === missedBlock.topic);
-    if (topic) {
-      topic.missedHours = (topic.missedHours || 0) + (missedBlock.duration / 60);
-      await exam.save();
-    }
-    const exams = await Exam.find({ user: userId });
-    const allBlocks = await StudyBlock.find({ user: userId });
-    const config = {
-      startDate: new Date(),
-      startHour: 9,
-      endHour: 23,
-      studyBlock: exam.breakRatio?.study || 50,
-      breakBlock: exam.breakRatio?.break || 10
-    };
-    const result = generateSchedule(exams, config, allBlocks);
-    if (result.conflicts?.length > 0) {
-      return res.status(400).json({
-        success: false,
-        msg: 'Cannot reschedule - insufficient time',
-        conflicts: result.conflicts
-      });
-    }
-    const newBlocks = result.schedule.flatMap(d => d.sessions.map(s => ({
-      user: userId,
-      subject: s.examName,
-      topic: s.topicName,
-      date: s.date,
-      time: s.startTime,
-      startTime: istToUtc(s.startTime),
-      duration: s.duration,
-      isGenerated: true,
-      isBreak: s.isBreak || false,
-      type: s.type || 'Study',
-      intervalDay: s.intervalDay,
-      priority: s.priority,
-      color: s.color,
-      status: 'scheduled'
-    })));
-    if (newBlocks.length > 0) await StudyBlock.insertMany(newBlocks);
-    res.json({
-      success: true,
-      msg: `Marked as missed. Rescheduled ${newBlocks.length} blocks`,
-      newBlocksCreated: newBlocks.length
+    const block = await StudyBlock.findOne({ _id: req.params.id, user: req.user._id });
+    
+    if (!block) return res.status(404).json({ success: false, msg: 'Block not found' });
+    if (block.missed) return res.status(400).json({ success: false, msg: 'Already marked as missed' });
+    if (block.completed) return res.status(400).json({ success: false, msg: 'Already completed' });
+
+    // Mark as missed but DON'T delete - keep for history
+    block.missed = true;
+    block.missedAt = new Date();
+    await block.save();
+
+    // Reschedule the topic to next available slot
+    const exam = await Exam.findById(block.examId);
+    const newBlocksCreated = await rescheduleMissedTopic(block, exam, req.user._id);
+
+    res.json({ 
+      success: true, 
+      msg: 'Marked as missed and rescheduled',
+      newBlocksCreated 
     });
+
   } catch (err) {
-    console.error('Missed block error:', err);
-    res.status(500).json({ msg: 'Server Error', error: err.message });
+    console.error('Missed route error:', err);
+    res.status(500).json({ success: false, msg: err.message });
   }
 });
 
