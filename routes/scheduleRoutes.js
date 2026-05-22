@@ -399,12 +399,18 @@ router.get('/google/callback', async (req, res) => {
   try {
     const { code, state } = req.query;
     if (!code ||!state) return res.status(400).send('Missing code or state');
+    
+    console.log('Callback hit. Code:', code.substring(0,20) + '...', 'State:', state);
+    console.log('Using redirect URI:', process.env.GOOGLE_REDIRECT_URI);
+    
     const oauth2Client = getOAuth2Client();
     const { tokens } = await oauth2Client.getToken(code);
+    
     await User.findByIdAndUpdate(state, { googleTokens: tokens });
     res.send(`<script>window.opener.postMessage({type:"GOOGLE_AUTH_SUCCESS"}, "*"); window.close();</script><h2>Connected!</h2>`);
   } catch (err) {
-    res.status(500).send(`<h2>Auth failed</h2><p>${err.message}</p>`);
+    console.error('Google auth error:', err.response?.data || err.message);
+    res.status(500).send(`<h2>Auth failed</h2><p>${err.message}</p><pre>${JSON.stringify(err.response?.data, null, 2)}</pre>`);
   }
 });
 
