@@ -42,18 +42,16 @@ router.get('/', auth, async (req, res) => {
   }
 });
 
-// GET /api/schedule/today - CRITICAL FIX
+// GET /api/schedule/today
 router.get('/today', auth, async (req, res) => {
   try {
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-
     const blocks = await StudyBlock.find({
       user: req.user.id,
       date: today,
       completed: false,
       missed: false
     }).sort({ time: 1 });
-
     res.json(blocks);
   } catch (err) {
     console.error(err);
@@ -107,7 +105,7 @@ router.get('/exams', auth, async (req, res) => {
       const totalHours = blocks.reduce((sum, b) => sum + b.duration / 60, 0);
       const completedHours = blocks.filter(b => b.completed).reduce((sum, b) => sum + b.duration / 60, 0);
       return {
-   ...exam.toObject(),
+       ...exam.toObject(),
         totalScheduledHours: Number(totalHours.toFixed(1)),
         completedHours: Number(completedHours.toFixed(1))
       };
@@ -179,6 +177,132 @@ router.get('/affirmation', auth, async (req, res) => {
   const dayIndex = new Date().getDate() % quotes.length;
   res.json({ quote: quotes[dayIndex] });
 });
+
+// ===== NEW DASHBOARD ENDPOINTS =====
+
+// GET /api/user/stats - For dashboard stat cards
+router.get('/user/stats', auth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+
+    const todayBlocks = await StudyBlock.countDocuments({
+      user: userId,
+      date: today,
+      isBreak: false
+    });
+
+    const completedToday = await StudyBlock.countDocuments({
+      user: userId,
+      date: today,
+      completed: true,
+      isBreak: false
+    });
+
+    const upcomingExams = await Exam.countDocuments({
+      user: userId,
+      examDate: { $gte: new Date() }
+    });
+
+    const totalTopics = await StudyBlock.distinct('topic', {
+      user: userId,
+      completed: false,
+      isBreak: false
+    });
+
+    // Simple streak calc: count consecutive days with completed blocks
+    let studyStreak = 0;
+    let checkDate = new Date();
+    while (studyStreak < 365) {
+      const dateStr = checkDate.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      const hasCompleted = await StudyBlock.exists({
+        user: userId,
+        date: dateStr,
+        completed: true,
+        isBreak: false
+      });
+      if (!hasCompleted) break;
+      studyStreak++;
+      checkDate.setDate(checkDate.getDate() - 1);
+    }
+
+    res.json({
+      todayBlocks,
+      completedToday,
+      upcomingExams,
+      totalTopics: totalTopics.length,
+      studyStreak
+    });
+  } catch (err) {
+    console.error('User stats error:', err);
+    res.status(500).json({ msg: 'Server error' });
+  }
+});
+
+// GET /api/user/subject-progress - For Progress Rings
+router.get('/user/subject-progress', auth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const subjects = await StudyBlock.aggregate([
+      { $match: { user: new mongoose.Types.ObjectId(userId), isBreak: false } },
+      { $group: {
+        _id: '$subject',
+        planned: { $sum: '$duration' },
+        completed: { $sum: { $cond: ['$completed', '$duration', 0] } }
+      }},
+      { $project: {
+        subject: '$_id',
+        planned: { $round: [{ $divide: ['$planned', 60] }, 1] },
+        completed: { $round: [{ $divide: ['$completed', 60] }, 1] },
+        _id: 0
+      }}
+    ]);
+    res.json(subjects);
+  } catch (err) {
+    console.error('Subject progress error:', err);
+    res.status(500).json({ msg: 'Server error' });
+  }
+});
+
+// GET /api/user/study-logs - For Study Log History
+router.get('/user/study-logs', auth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const logs = await StudyBlock.aggregate([
+      { $match: { user: new mongoose.Types.ObjectId(userId), isBreak: false } },
+      { $group: {
+        _id: '$subject',
+        planned: { $sum: '$duration' },
+        actual: { $sum: { $ifNull: ['$actualDuration', '$duration'] } }
+      }},
+      { $project: {
+        subject: '$_id',
+        planned: { $round: [{ $divide: ['$planned', 60] }, 1] },
+        actual: { $round: [{ $divide: ['$actual', 60] }, 1] },
+        _id: 0
+      }}
+    ]);
+    res.json(logs);
+  } catch (err) {
+    console.error('Study logs error:', err);
+    res.status(500).json({ msg: 'Server error' });
+  }
+});
+
+// GET /api/user/confidence - For Confidence Tracker
+router.get('/user/confidence', auth, async (req, res) => {
+  try {
+    const exams = await Exam.find({ user: req.user.id });
+    const conf = {};
+    exams.forEach(e => conf[e._id] = e.confidenceLevel || 0);
+    res.json(conf);
+  } catch (err) {
+    console.error('Confidence fetch error:', err);
+    res.status(500).json({ msg: 'Server error' });
+  }
+});
+
+// ===== REST OF YOUR EXISTING ROUTES =====
 
 // GET /api/schedule/export/pdf
 router.get('/export/pdf', auth, pdfLimiter, async (req, res) => {
@@ -281,70 +405,49 @@ router.post('/generate', auth, async (req, res) => {
   try {
     const { exams } = req.body;
     const userId = req.user.id;
-
     console.log('=== GENERATE START ===');
     console.log('User ID:', userId);
     console.log('Exams count:', exams?.length);
-
     if (!exams || exams.length === 0) return res.status(400).json({ msg: 'No exams provided' });
-
     await StudyBlock.deleteMany({ user: userId, isGenerated: true });
-
-    // Calculate daysToSchedule: from today till day before earliest exam
-    const examDates = exams
-   .map(e => new Date(e.examDate || e.date))
-   .filter(d =>!isNaN(d))
-   .sort((a, b) => a - b);
-
-    let daysToSchedule = 7; // default
+    const examDates = exams.map(e => new Date(e.examDate || e.date)).filter(d =>!isNaN(d)).sort((a, b) => a - b);
+    let daysToSchedule = 7;
     if (examDates.length > 0) {
       const firstExamDate = examDates[0];
       const today = new Date();
       today.setHours(0, 0, 0, 0);
-
       const examDay = new Date(firstExamDate);
       examDay.setHours(0, 0, 0, 0);
-
       const dayBeforeExam = new Date(examDay);
       dayBeforeExam.setDate(dayBeforeExam.getDate() - 1);
-
       const diffTime = dayBeforeExam - today;
       daysToSchedule = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1);
     }
-
     console.log('Days to schedule:', daysToSchedule);
-
     const now = new Date();
     const currentHour = Number(now.toLocaleTimeString('en-GB', {
       timeZone: 'Asia/Kolkata',
       hour: '2-digit'
     }));
-
-    // THIS IS WHERE THE CONFIG GOES
     const config = {
       startDate: new Date(),
       startHour: Math.max(9, currentHour + 1),
       endHour: 23,
       studyBlock: 50,
       breakBlock: 10,
-      daysToSchedule: daysToSchedule, // <-- HERE
+      daysToSchedule: daysToSchedule,
       breakRatio: { study: 50, break: 10 }
     };
-
     console.log('Config:', config);
-
     const result = generateSchedule(exams, config, []);
-
     console.log('Scheduler returned:', {
       days: result.schedule?.length || 0,
       conflicts: result.conflicts?.length || 0,
       warnings: result.warnings
     });
-
     if (result.conflicts?.length > 0) {
       return res.status(400).json({ success: false, conflicts: result.conflicts, msg: 'Schedule conflicts detected' });
     }
-
     const blocksToSave = result.schedule.flatMap(day =>
       day.sessions.map(s => ({
         user: userId,
@@ -364,21 +467,18 @@ router.post('/generate', auth, async (req, res) => {
         missed: false
       }))
     );
-
     console.log('Total blocks to save:', blocksToSave.length);
-
     if (blocksToSave.length > 0) {
       await StudyBlock.insertMany(blocksToSave);
       console.log('INSERTED TO DB:', blocksToSave.length);
     }
-
     res.json({ success: true, count: blocksToSave.length, warnings: result.warnings || [] });
-
   } catch (err) {
     console.error('GENERATE ERROR:', err);
     res.status(500).json({ msg: 'Server error', error: err.message });
   }
 });
+
 // POST /api/schedule/google/sync
 router.post('/google/sync', auth, syncLimiter, async (req, res) => {
   try {
@@ -451,17 +551,44 @@ router.patch('/user/confidence', auth, async (req, res) => {
   }
 });
 
+// PATCH /api/exams/:id/confidence - For Confidence Tracker per exam
+router.patch('/exams/:id/confidence', auth, async (req, res) => {
+  try {
+    const { level } = req.body;
+    if (level < 1 || level > 4) return res.status(400).json({ msg: 'Level must be 1-4' });
+    const exam = await Exam.findOneAndUpdate(
+      { _id: req.params.id, user: req.user.id },
+      { confidenceLevel: level },
+      { new: true }
+    );
+    if (!exam) return res.status(404).json({ msg: 'Exam not found' });
+    res.json({ success: true, examId: exam._id, level });
+  } catch (err) {
+    console.error('Confidence update error:', err);
+    res.status(500).json({ msg: 'Server Error' });
+  }
+});
+
 // ===== PARAMETERIZED ROUTES LAST =====
 
 // PATCH /api/schedule/:id/complete
 router.patch('/:id/complete', auth, async (req, res) => {
   try {
+    const { actualDuration } = req.body; // Frontend sends this
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(400).json({ msg: 'Invalid block ID' });
+    
     const block = await StudyBlock.findOneAndUpdate(
       { _id: req.params.id, user: req.user.id },
-      { completed: true, missed: false },
+      { 
+        completed: true, 
+        missed: false,
+        status: 'completed',
+        actualDuration: actualDuration || null, // Save actual time spent
+        loggedAt: new Date()
+      },
       { new: true }
     );
+    
     if (!block) return res.status(404).json({ msg: 'Block not found' });
     res.json(block);
   } catch (err) {
@@ -470,36 +597,27 @@ router.patch('/:id/complete', auth, async (req, res) => {
   }
 });
 
-// PATCH /api/schedule/:id/missed - MARK MISSED + REGENERATE WITHOUT DELETING
+// PATCH /api/schedule/:id/missed
 router.patch('/:id/missed', auth, async (req, res) => {
   try {
     const userId = req.user.id;
     const blockId = req.params.id;
     if (!mongoose.Types.ObjectId.isValid(blockId)) return res.status(400).json({ msg: 'Invalid block ID' });
-
     const missedBlock = await StudyBlock.findOne({ _id: blockId, user: userId });
     if (!missedBlock) return res.status(404).json({ msg: 'Block not found' });
     if (missedBlock.isBreak) return res.status(400).json({ success: false, msg: 'Breaks cannot be marked as missed' });
     if (missedBlock.status === 'missed') return res.status(400).json({ success: false, msg: 'Already marked as missed' });
-
-    // 1. Mark as missed - DON'T DELETE
     missedBlock.status = 'missed';
     await missedBlock.save();
-
-    // 2. Add hours back to topic
     const exam = await Exam.findOne({ user: userId, subject: missedBlock.subject });
     if (!exam) return res.status(404).json({ msg: 'Exam not found' });
-
     const topic = exam.syllabusTopics.find(t => t.name === missedBlock.topic);
     if (topic) {
       topic.missedHours = (topic.missedHours || 0) + (missedBlock.duration / 60);
       await exam.save();
     }
-
-    // 3. Regenerate schedule for future days only
     const exams = await Exam.find({ user: userId });
     const allBlocks = await StudyBlock.find({ user: userId });
-
     const config = {
       startDate: new Date(),
       startHour: 9,
@@ -507,9 +625,7 @@ router.patch('/:id/missed', auth, async (req, res) => {
       studyBlock: exam.breakRatio?.study || 50,
       breakBlock: exam.breakRatio?.break || 10
     };
-
     const result = generateSchedule(exams, config, allBlocks);
-
     if (result.conflicts?.length > 0) {
       return res.status(400).json({
         success: false,
@@ -517,7 +633,6 @@ router.patch('/:id/missed', auth, async (req, res) => {
         conflicts: result.conflicts
       });
     }
-
     const newBlocks = result.schedule.flatMap(d => d.sessions.map(s => ({
       user: userId,
       subject: s.examName,
@@ -534,9 +649,7 @@ router.patch('/:id/missed', auth, async (req, res) => {
       color: s.color,
       status: 'scheduled'
     })));
-
     if (newBlocks.length > 0) await StudyBlock.insertMany(newBlocks);
-
     res.json({
       success: true,
       msg: `Marked as missed. Rescheduled ${newBlocks.length} blocks`,
@@ -547,42 +660,35 @@ router.patch('/:id/missed', auth, async (req, res) => {
     res.status(500).json({ msg: 'Server Error', error: err.message });
   }
 });
-// POST /api/schedule/:id/start - START LATE AND SHIFT FOLLOWING BLOCKS
+
+// POST /api/schedule/:id/start
 router.post('/:id/start', auth, async (req, res) => {
   try {
     const userId = req.user.id;
     const blockId = req.params.id;
     const block = await StudyBlock.findOne({ _id: blockId, user: userId });
-
     if (!block) return res.status(404).json({ msg: 'Block not found' });
     if (block.completed || block.missed) return res.status(400).json({ msg: 'Block already completed or missed' });
-
     const now = new Date();
     const currentTime = now.toLocaleTimeString('en-GB', {
       timeZone: 'Asia/Kolkata',
       hour: '2-digit',
       minute: '2-digit'
     });
-
     const today = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-
     const [oldH, oldM] = block.time.split(':').map(Number);
     const [newH, newM] = currentTime.split(':').map(Number);
     const oldMinutes = oldH * 60 + oldM;
     const newMinutes = newH * 60 + newM;
     const shiftMinutes = newMinutes - oldMinutes;
-
     if (shiftMinutes <= 0) return res.status(400).json({ msg: 'Cannot start before scheduled time' });
-
     const futureBlocks = await StudyBlock.find({
       user: userId,
       date: today,
       time: { $gt: block.time },
       _id: { $ne: blockId }
     }).sort({ time: 1 });
-
     await StudyBlock.updateOne({ _id: blockId }, { time: currentTime, startTime: istToUtc(currentTime) });
-
     for (const futureBlock of futureBlocks) {
       const [fh, fm] = futureBlock.time.split(':').map(Number);
       const totalMin = fh * 60 + fm + shiftMinutes;
@@ -591,7 +697,6 @@ router.post('/:id/start', auth, async (req, res) => {
       const newTime = `${String(newH).padStart(2,'0')}:${String(newM).padStart(2,'0')}`;
       await StudyBlock.updateOne({ _id: futureBlock._id }, { time: newTime, startTime: istToUtc(newTime) });
     }
-
     res.json({ success: true, msg: `Started at ${currentTime}, shifted ${futureBlocks.length} blocks` });
   } catch (err) {
     console.error('Start block error:', err);
