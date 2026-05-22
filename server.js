@@ -189,7 +189,7 @@ app.use('/api/admin', require('./routes/adminRoutes'));
 app.use('/api/notifications', require('./routes/notificationRoutes'));
 
 app.get('/', (req, res) => res.send('API Running'));
-
+app.get('/api/schedule/test', (req, res) => res.json({ works: true }));
 app.use((req, res, next) => {
   res.status(404).json({ success: false, message: 'Route not found', path: req.originalUrl });
 });
