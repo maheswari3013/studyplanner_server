@@ -645,7 +645,57 @@ router.patch('/:id/complete', auth, async (req, res) => {
     res.status(500).json({ msg: err.message });
   }
 });
-
+// Helper: Reschedule a missed topic to next available slot
+const rescheduleMissedTopic = async (block, exam, userId) => {
+  if (!exam) return 0;
+  
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  
+  // Find next available day starting tomorrow
+  let nextDate = new Date();
+  nextDate.setDate(nextDate.getDate() + 1);
+  const nextDateStr = nextDate.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  
+  // Get existing blocks for that day to avoid conflicts
+  const existingBlocks = await StudyBlock.find({
+    user: userId,
+    date: nextDateStr,
+    missed: false
+  }).sort({ time: 1 });
+  
+  // Simple: schedule at 09:00 or after last block
+  let startTime = '09:00';
+  if (existingBlocks.length > 0) {
+    const lastBlock = existingBlocks[existingBlocks.length - 1];
+    const [h, m] = lastBlock.time.split(':').map(Number);
+    const totalMin = h * 60 + m + lastBlock.duration + 10; // +10 min break
+    const newH = Math.floor(totalMin / 60);
+    const newM = totalMin % 60;
+    if (newH < 22) { // Don't go past 10pm
+      startTime = `${String(newH).padStart(2,'0')}:${String(newM).padStart(2,'0')}`;
+    }
+  }
+  
+  // Create new block
+  const newBlock = new StudyBlock({
+    user: userId,
+    examId: exam._id,
+    subject: block.subject,
+    topic: block.topic + ' (Makeup)',
+    date: nextDateStr,
+    time: startTime,
+    startTime: istToUtc(startTime),
+    duration: block.duration,
+    isGenerated: true,
+    type: block.type,
+    priority: block.priority,
+    color: block.color,
+    rescheduledFrom: block._id
+  });
+  
+  await newBlock.save();
+  return 1;
+};
 router.patch('/:id/missed', auth, async (req, res) => {
   try {
     const block = await StudyBlock.findOne({ _id: req.params.id, user: req.user._id });

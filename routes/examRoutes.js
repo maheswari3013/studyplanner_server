@@ -76,5 +76,23 @@ router.delete('/:id', auth, async (req, res) => {
     res.status(500).json({ msg: 'Server Error', error: err.message });
   }
 });
+router.patch('/:id/confidence', auth, async (req, res) => {
+  try {
+    const { level } = req.body;
+    if (level < 0 || level > 4) return res.status(400).json({ msg: 'Level must be 0-4' });
+    
+    const exam = await Exam.findOneAndUpdate(
+      { _id: req.params.id, user: req.user.id },
+      { confidenceLevel: level },
+      { new: true }
+    );
+    
+    if (!exam) return res.status(404).json({ msg: 'Exam not found' });
+    res.json({ success: true, examId: exam._id, level });
+  } catch (err) {
+    console.error('Confidence update error:', err);
+    res.status(500).json({ msg: 'Server Error' });
+  }
+});
 
 module.exports = router;
