@@ -183,7 +183,7 @@ const startCronJobs = () => {
 // ===== ROUTES =====
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/exams', require('./routes/examRoutes'));
-app.use('/api/schedule', require('./routes/scheduleRoutes'));
+app.use('/api/schedule', require('./routes/scheduleRoutes')); // Make sure file is named scheduleRoutes.js
 app.use('/api/user', require('./routes/user'));
 app.use('/api/admin', require('./routes/adminRoutes'));
 app.use('/api/notifications', require('./routes/notificationRoutes'));
