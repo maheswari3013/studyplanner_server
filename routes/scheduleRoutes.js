@@ -66,8 +66,8 @@ router.get('/upcoming', auth, async (req, res) => {
       user: req.user.id,
       examDate: { $gte: new Date() }
     })
-  .sort({ examDate: 1 })
-  .limit(5);
+ .sort({ examDate: 1 })
+ .limit(5);
     res.json(exams);
   } catch (err) {
     console.error('Upcoming exams error:', err);
@@ -240,7 +240,7 @@ router.get('/exams', auth, async (req, res) => {
       const totalHours = blocks.reduce((sum, b) => sum + b.duration / 60, 0);
       const completedHours = blocks.filter(b => b.completed).reduce((sum, b) => sum + b.duration / 60, 0);
       return {
-       ...exam.toObject(),
+      ...exam.toObject(),
         totalScheduledHours: Number(totalHours.toFixed(1)),
         completedHours: Number(completedHours.toFixed(1))
       };
@@ -382,32 +382,46 @@ router.get('/pending', auth, async (req, res) => {
   }
 });
 
-// Google Calendar routes
+// ===== GOOGLE CALENDAR ROUTES =====
+
+// GET /api/schedule/google/status - NEW: Check if connected
+router.get('/google/status', auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    res.json({
+      connected:!!user.googleTokens?.refresh_token
+    });
+  } catch (err) {
+    res.status(500).json({ connected: false });
+  }
+});
+
+// GET /api/schedule/google/auth
 router.get('/google/auth', auth, (req, res) => {
   const oauth2Client = getOAuth2Client();
   const url = oauth2Client.generateAuthUrl({
-    access_type: 'offline', // gets refresh_token
-    prompt: 'consent',      // forces refresh_token every time
+    access_type: 'offline',
+    prompt: 'consent', // Forces refresh_token
     scope: ['https://www.googleapis.com/auth/calendar.events'],
     state: req.user.id
   });
-  res.redirect(url);
+  res.json({ url }); // Return JSON, not redirect, so frontend can open popup
 });
 
 router.get('/google/callback', async (req, res) => {
   // Fix COOP error
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
   res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
-  
+
   try {
     const { code, state } = req.query;
-    if (!code || !state) return res.status(400).send('Missing code or state');
-    
+    if (!code ||!state) return res.status(400).send('Missing code or state');
+
     const oauth2Client = getOAuth2Client();
     const { tokens } = await oauth2Client.getToken(code);
-    
+
     await User.findByIdAndUpdate(state, { googleTokens: tokens });
-    
+
     res.send(`
       <script>
         window.opener.postMessage({type:"GOOGLE_AUTH_SUCCESS"}, "*");
