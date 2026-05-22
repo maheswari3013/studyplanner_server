@@ -59,15 +59,15 @@ router.get('/today', auth, async (req, res) => {
   }
 });
 
-// GET /api/schedule/upcoming - ADDED FOR DASHBOARD
+// GET /api/schedule/upcoming
 router.get('/upcoming', auth, async (req, res) => {
   try {
     const exams = await Exam.find({
       user: req.user.id,
       examDate: { $gte: new Date() }
     })
-   .sort({ examDate: 1 })
-   .limit(5);
+  .sort({ examDate: 1 })
+  .limit(5);
     res.json(exams);
   } catch (err) {
     console.error('Upcoming exams error:', err);
@@ -75,7 +75,7 @@ router.get('/upcoming', auth, async (req, res) => {
   }
 });
 
-// GET /api/schedule/user/stats - ADDED FOR DASHBOARD
+// GET /api/schedule/user/stats
 router.get('/user/stats', auth, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -100,7 +100,6 @@ router.get('/user/stats', auth, async (req, res) => {
       isBreak: false
     });
 
-    // Simple streak - count consecutive days with completed blocks
     let studyStreak = 0;
     let checkDate = new Date();
     while (true) {
@@ -114,7 +113,7 @@ router.get('/user/stats', auth, async (req, res) => {
       if (!hasCompleted) break;
       studyStreak++;
       checkDate.setDate(checkDate.getDate() - 1);
-      if (studyStreak > 365) break; // safety
+      if (studyStreak > 365) break;
     }
 
     res.json({
@@ -130,7 +129,7 @@ router.get('/user/stats', auth, async (req, res) => {
   }
 });
 
-// GET /api/schedule/user/subject-progress - ADDED FOR DASHBOARD
+// GET /api/schedule/user/subject-progress
 router.get('/user/subject-progress', auth, async (req, res) => {
   try {
     const subjects = await StudyBlock.aggregate([
@@ -155,7 +154,7 @@ router.get('/user/subject-progress', auth, async (req, res) => {
   }
 });
 
-// GET /api/schedule/user/study-logs - ADDED FOR DASHBOARD
+// GET /api/schedule/user/study-logs
 router.get('/user/study-logs', auth, async (req, res) => {
   try {
     const logs = await StudyBlock.aggregate([
@@ -180,7 +179,7 @@ router.get('/user/study-logs', auth, async (req, res) => {
   }
 });
 
-// GET /api/schedule/user/confidence - ADDED FOR DASHBOARD
+// GET /api/schedule/user/confidence
 router.get('/user/confidence', auth, async (req, res) => {
   try {
     const exams = await Exam.find({ user: req.user.id });
@@ -241,7 +240,7 @@ router.get('/exams', auth, async (req, res) => {
       const totalHours = blocks.reduce((sum, b) => sum + b.duration / 60, 0);
       const completedHours = blocks.filter(b => b.completed).reduce((sum, b) => sum + b.duration / 60, 0);
       return {
-      ...exam.toObject(),
+       ...exam.toObject(),
         totalScheduledHours: Number(totalHours.toFixed(1)),
         completedHours: Number(completedHours.toFixed(1))
       };
@@ -415,9 +414,6 @@ router.post('/generate', auth, async (req, res) => {
   try {
     const { exams } = req.body;
     const userId = req.user.id;
-    console.log('=== GENERATE START ===');
-    console.log('User ID:', userId);
-    console.log('Exams count:', exams?.length);
     if (!exams || exams.length === 0) return res.status(400).json({ msg: 'No exams provided' });
     await StudyBlock.deleteMany({ user: userId, isGenerated: true });
     const examDates = exams.map(e => new Date(e.examDate || e.date)).filter(d =>!isNaN(d)).sort((a, b) => a - b);
@@ -433,7 +429,6 @@ router.post('/generate', auth, async (req, res) => {
       const diffTime = dayBeforeExam - today;
       daysToSchedule = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1);
     }
-    console.log('Days to schedule:', daysToSchedule);
     const now = new Date();
     const currentHour = Number(now.toLocaleTimeString('en-GB', {
       timeZone: 'Asia/Kolkata',
@@ -448,13 +443,7 @@ router.post('/generate', auth, async (req, res) => {
       daysToSchedule: daysToSchedule,
       breakRatio: { study: 50, break: 10 }
     };
-    console.log('Config:', config);
     const result = generateSchedule(exams, config, []);
-    console.log('Scheduler returned:', {
-      days: result.schedule?.length || 0,
-      conflicts: result.conflicts?.length || 0,
-      warnings: result.warnings
-    });
     if (result.conflicts?.length > 0) {
       return res.status(400).json({ success: false, conflicts: result.conflicts, msg: 'Schedule conflicts detected' });
     }
@@ -477,10 +466,8 @@ router.post('/generate', auth, async (req, res) => {
         missed: false
       }))
     );
-    console.log('Total blocks to save:', blocksToSave.length);
     if (blocksToSave.length > 0) {
       await StudyBlock.insertMany(blocksToSave);
-      console.log('INSERTED TO DB:', blocksToSave.length);
     }
     res.json({ success: true, count: blocksToSave.length, warnings: result.warnings || [] });
   } catch (err) {
@@ -561,7 +548,7 @@ router.patch('/user/confidence', auth, async (req, res) => {
   }
 });
 
-// PATCH /api/exams/:id/confidence - For Confidence Tracker per exam
+// PATCH /api/exams/:id/confidence
 router.patch('/exams/:id/confidence', auth, async (req, res) => {
   try {
     const { level } = req.body;

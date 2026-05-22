@@ -20,8 +20,10 @@ const UserSchema = new mongoose.Schema({
   },
   googleTokens: {
     access_token: String,
-    refresh_token: String,
-    expiry_date: Number
+    refresh_token: { type: String, index: true }, 
+    expiry_date: Number,
+    scope: String,       
+  token_type: String
   },
   subjectConfidence: { type: Map, of: Number, default: {} },
   showAffirmations: { type: Boolean, default: true },
