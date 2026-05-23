@@ -4,10 +4,7 @@ const jwt = require('jsonwebtoken');
 const authMiddleware = require('../middleware/auth');
 const User = require('../models/User');
 
-const client = new OAuth2Client(
-  process.env.GOOGLE_CLIENT_ID,
-  process.env.GOOGLE_CLIENT_SECRET
-);
+const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 const clientUrl = process.env.CLIENT_URL || process.env.FRONTEND_URL || 'https://studyplanner-client.vercel.app';
 const googleCallbackUrl = process.env.GOOGLE_CALLBACK_URL || process.env.GOOGLE_REDIRECT_URI;
@@ -98,22 +95,32 @@ router.get('/google/calendar/callback', async (req, res) => {
   try {
     const { code, state } = req.query;
     if (!code) return res.status(400).send('Missing code');
-    if (!state) return res.status(400).send('Missing state');
 
-    const decoded = jwt.verify(state, process.env.JWT_SECRET);
-    const { tokens } = await client.getToken({ code, redirect_uri: googleCalendarCallbackUrl });
+    let userId = req.user?._id;
+    if (!userId && state) {
+      const decoded = jwt.verify(state, process.env.JWT_SECRET);
+      userId = decoded.id || decoded._id;
+    }
+    if (!userId) return res.status(400).send('Missing state');
 
-    await User.findByIdAndUpdate(decoded.id || decoded._id, {
+    const { tokens } = await client.getToken({
+      code,
+      redirect_uri: process.env.GOOGLE_CALENDAR_CALLBACK || googleCalendarCallbackUrl
+    });
+
+    const update = {
       googleAccessToken: tokens.access_token,
-      googleRefreshToken: tokens.refresh_token,
       googleTokenExpiry: tokens.expiry_date,
       googleTokens: tokens
-    });
+    };
+    if (tokens.refresh_token) update.googleRefreshToken = tokens.refresh_token;
+
+    await User.findByIdAndUpdate(userId, update);
 
     res.send(`<script>window.opener.postMessage({type:'google-calendar-success'},'${clientUrl}');window.close();</script>`);
   } catch (err) {
-    console.error('Google calendar callback error:', err.response?.data || err.message);
-    res.status(500).send(`<script>window.opener.postMessage({type:'google-calendar-error',error:'${escapeScriptValue(err.message)}'},'${clientUrl}');window.close();</script>`);
+    console.error('Calendar callback error:', err.response?.data || err.message);
+    res.status(500).send('Calendar connection failed');
   }
 });
 

@@ -24,8 +24,6 @@ const istToUtc = (timeStr) => {
   return `${String(utcH).padStart(2,'0')}:${String(utcM).padStart(2,'0')}`;
 };
 
-const frontendOrigin = process.env.FRONTEND_URL || 'https://studyplanner-client.vercel.app';
-
 const getOAuth2Client = () => new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
@@ -429,39 +427,6 @@ router.get('/google/auth', auth, (req, res) => {
     state: req.user.id
   });
   res.json({ url });
-});
-
-// Error 5: Fixed route path from /google/callback to /auth/google/callback
-router.get('/auth/google/callback', async (req, res) => {
-  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
-  res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
-
-  try {
-    const { code, state } = req.query;
-    if (!code ||!state) return res.status(400).send('Missing code or state');
-
-    const oauth2Client = getOAuth2Client();
-    const { tokens } = await oauth2Client.getToken(code);
-
-    await User.findByIdAndUpdate(state, { googleTokens: tokens });
-
-    res.send(`
-      <script>
-        window.opener.postMessage({ type: 'google-auth-success' }, '${frontendOrigin}');
-        window.close();
-      </script>
-      <h2>Connected! You can close this window.</h2>
-    `);
-  } catch (err) {
-    console.error('Google auth error:', err.response?.data || err.message);
-    res.status(500).send(`
-      <script>
-        window.opener.postMessage({ type: 'google-auth-error', error: '${String(err.message).replace(/'/g, "\\'")}' }, '*');
-        window.close();
-      </script>
-      <h2>Auth failed</h2><p>${String(err.message)}</p>
-    `);
-  }
 });
 
 // ===== ADMIN ROUTES - Request 1 + Error 3 =====
