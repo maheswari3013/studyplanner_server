@@ -74,7 +74,7 @@ const StudyBlockSchema = new mongoose.Schema({
   actualDuration: { type: Number, default: 0 },
   loggedAt: Date,
   
-  // ADD THESE 3 FIELDS
+  // Error 6: Fields for overdue handling + tracking
   notifiedOverdue: { type: Boolean, default: false },
   completedAt: Date,
   missedAt: Date
@@ -84,6 +84,8 @@ const StudyBlockSchema = new mongoose.Schema({
 StudyBlockSchema.index({ user: 1, date: 1 });
 StudyBlockSchema.index({ user: 1, subject: 1, date: 1 });
 StudyBlockSchema.index({ date: 1, startTime: 1 });
-StudyBlockSchema.index({ date: 1, notifiedOverdue: 1, completed: 1, missed: 1 }); // ADD THIS INDEX FOR CRON
+StudyBlockSchema.index({ date: 1, notifiedOverdue: 1, completed: 1, missed: 1 });
+StudyBlockSchema.index({ user: 1, isBreak: 1, completed: 1 });
+StudyBlockSchema.index({ user: 1, examId: 1 }); 
 
 module.exports = mongoose.model('StudyBlock', StudyBlockSchema);

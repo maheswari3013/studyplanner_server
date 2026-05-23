@@ -2,9 +2,11 @@ const User = require('../models/User');
 
 module.exports = async function(req, res, next) {
   try {
-    const user = await User.findById(req.user.id);
+    if (!req.user?.id) return res.status(401).json({ msg: 'No auth token' });
     
-    if (user && user.role === 'admin') {
+    const user = await User.findById(req.user.id);
+    if (user && (user.role === 'admin' || user.isAdmin === true)) {
+      req.adminUser = user;
       next();
     } else {
       return res.status(403).json({ msg: 'Admin access required' });

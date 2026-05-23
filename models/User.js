@@ -23,7 +23,7 @@ const UserSchema = new mongoose.Schema({
     refresh_token: { type: String, index: true }, 
     expiry_date: Number,
     scope: String,       
-  token_type: String
+    token_type: String
   },
   subjectConfidence: { type: Map, of: Number, default: {} },
   showAffirmations: { type: Boolean, default: true },
@@ -48,5 +48,13 @@ const UserSchema = new mongoose.Schema({
     index: true
   }
 });
+
+// Virtual for backwards compatibility with old isAdmin checks
+UserSchema.virtual('isAdmin').get(function() {
+  return this.role === 'admin';
+});
+
+UserSchema.set('toJSON', { virtuals: true });
+UserSchema.set('toObject', { virtuals: true });
 
 module.exports = mongoose.models.User || mongoose.model('User', UserSchema);

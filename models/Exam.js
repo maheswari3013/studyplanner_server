@@ -38,7 +38,7 @@ const ExamSchema = new mongoose.Schema({
     max: 5,
     default: 3
   },
-  confidenceLevel: { // ADD THIS - for Confidence Tracker
+  confidenceLevel: { // Used by PATCH /exams/:id/confidence
     type: Number,
     min: 0,
     max: 4,
@@ -53,10 +53,10 @@ const ExamSchema = new mongoose.Schema({
     required: false,
     min: 0
   },
-  syllabusTopics: [{ // FIXED: Removed duplicate, kept one with missedHours
+  syllabusTopics: [{
     name: { type: String, required: true },
     hours: { type: Number, default: 0 },
-    missedHours: { type: Number, default: 0 }
+    missedHours: { type: Number, default: 0 } // For missed topic rescheduling
   }],
   availableHours: {
     mon: { type: Number, default: 4 },
@@ -92,5 +92,7 @@ const ExamSchema = new mongoose.Schema({
     default: Date.now
   }
 });
+
+ExamSchema.index({ user: 1, examDate: 1 }); // Helps /upcoming query
 
 module.exports = mongoose.models.Exam || mongoose.model('Exam', ExamSchema);

@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
 const auth = require('../middleware/auth');
+const adminAuth = require('../middleware/adminAuth'); // Error 3: Added admin middleware
 const { google } = require('googleapis');
 const User = require('../models/User');
 const Exam = require('../models/Exam');
@@ -25,7 +26,7 @@ const istToUtc = (timeStr) => {
 const getOAuth2Client = () => new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
-  process.env.GOOGLE_REDIRECT_URI
+  process.env.GOOGLE_REDIRECT_URI || process.env.GOOGLE_CALLBACK_URL // Error 5: Fallback for env var
 );
 
 // ===== STATIC GET ROUTES FIRST =====
@@ -42,13 +43,33 @@ router.get('/', auth, async (req, res) => {
 
 router.get('/today', auth, async (req, res) => {
   try {
-    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const now = new Date();
+    const today = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const currentTime = now.toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
+
     const blocks = await StudyBlock.find({
       user: req.user.id,
       date: today
-      // REMOVED: completed: false, missed: false 
     }).sort({ time: 1 });
-    res.json(blocks);
+
+    // Error 6: Only auto-mark missed if time has actually passed + 15min grace period
+    const updatedBlocks = await Promise.all(blocks.map(async (block) => {
+      if (!block.completed &&!block.missed &&!block.isBreak) {
+        const [bh, bm] = block.time.split(':').map(Number);
+        const [ch, cm] = currentTime.split(':').map(Number);
+        const blockMinutes = bh * 60 + bm + block.duration + 15; // 15min grace
+        const currentMinutes = ch * 60 + cm;
+
+        if (currentMinutes > blockMinutes) {
+          block.missed = true;
+          block.missedAt = new Date();
+          await block.save();
+        }
+      }
+      return block;
+    }));
+
+    res.json(updatedBlocks);
   } catch (err) {
     console.error(err);
     res.status(500).json({ msg: 'Server error' });
@@ -229,7 +250,7 @@ router.get('/exams', auth, async (req, res) => {
       const totalHours = blocks.reduce((sum, b) => sum + b.duration / 60, 0);
       const completedHours = blocks.filter(b => b.completed).reduce((sum, b) => sum + b.duration / 60, 0);
       return {
-    ...exam.toObject(),
+   ...exam.toObject(),
         totalScheduledHours: Number(totalHours.toFixed(1)),
         completedHours: Number(completedHours.toFixed(1))
       };
@@ -389,7 +410,8 @@ router.get('/google/auth', auth, (req, res) => {
   res.json({ url });
 });
 
-router.get('/google/callback', async (req, res) => {
+// Error 5: Fixed route path from /google/callback to /auth/google/callback
+router.get('/auth/google/callback', async (req, res) => {
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
   res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
 
@@ -421,12 +443,46 @@ router.get('/google/callback', async (req, res) => {
   }
 });
 
+// ===== ADMIN ROUTES - Request 1 + Error 3 =====
+router.get('/admin/users', auth, adminAuth, async (req, res) => {
+  try {
+    const users = await User.find({}).select('-password -googleTokens');
+    const userStats = await Promise.all(users.map(async (user) => {
+      const blockCount = await StudyBlock.countDocuments({ user: user._id });
+      const examCount = await Exam.countDocuments({ user: user._id });
+      return {...user.toObject(), blockCount, examCount };
+    }));
+    res.json(userStats);
+  } catch (err) {
+    res.status(500).json({ msg: 'Server Error' });
+  }
+});
+
+router.get('/admin/stats', auth, adminAuth, async (req, res) => {
+  try {
+    const totalUsers = await User.countDocuments();
+    const totalBlocks = await StudyBlock.countDocuments();
+    const totalExams = await Exam.countDocuments();
+    const activeUsers = await StudyBlock.distinct('user', {
+      createdAt: { $gte: new Date(Date.now() - 7*24*60*60*1000) }
+    });
+    res.json({
+      totalUsers,
+      totalBlocks,
+      totalExams,
+      activeUsers: activeUsers.length
+    });
+  } catch (err) {
+    res.status(500).json({ msg: 'Server Error' });
+  }
+});
+
 // ===== STATIC POST/DELETE ROUTES =====
 
 router.post('/generate', auth, async (req, res) => {
   try {
-    const { exams, startHour = 9, endHour = 18, startDate } = req.body; 
-    
+    const { exams, startHour = 0, endHour = 23, startDate } = req.body; // Error 7: Default to 0-23
+
     const userId = req.user.id;
     if (!exams || exams.length === 0) return res.status(400).json({ msg: 'No exams provided' });
 
@@ -464,10 +520,10 @@ router.post('/generate', auth, async (req, res) => {
     const isOvernight = startHour > endHour;
     if (isOvernight) effectiveEndHour = endHour + 24;
 
-    if (isToday) {
-      effectiveStartHour = Math.max(startHour, currentHour + 1);
-      // If we've passed the window for today, roll to tomorrow
-      if (!isOvernight && effectiveStartHour >= endHour) {
+    // Error 7: Respect 0-23 range, only shift if today AND current hour > startHour
+    if (isToday &&!isOvernight && currentHour >= startHour) {
+      effectiveStartHour = currentHour + 1;
+      if (effectiveStartHour >= endHour) {
         effectiveStartHour = startHour;
         actualStartDate.setDate(actualStartDate.getDate() + 1);
         effectiveDays = Math.max(1, daysToSchedule - 1);
@@ -525,7 +581,7 @@ router.post('/generate', auth, async (req, res) => {
       count: blocksToSave.length,
       warnings: result.warnings || [],
       msg: blocksToSave.length > 0
-     ? `Generated ${blocksToSave.length} blocks, ${effectiveStartHour}:00-${endHour}:00`
+    ? `Generated ${blocksToSave.length} blocks, ${effectiveStartHour}:00-${endHour}:00`
         : `No blocks scheduled for ${actualStartDate.toDateString()} ${effectiveStartHour}:00-${endHour}:00`
     });
   } catch (err) {
@@ -619,64 +675,58 @@ router.patch('/exams/:id/confidence', auth, async (req, res) => {
   }
 });
 
-
 // ===== PARAMETERIZED ROUTES LAST =====
 
 router.patch('/:id/complete', auth, async (req, res) => {
   try {
-    console.log('Completing block:', req.params.id); // ADD THIS
-    
+    console.log('Completing block:', req.params.id);
+
     const block = await StudyBlock.findOneAndUpdate(
       { _id: req.params.id, user: req.user._id },
       { completed: true, missed: false, completedAt: new Date() },
       { new: true }
     );
-    
+
     if (!block) {
-      console.log('Block not found'); 
+      console.log('Block not found');
       return res.status(404).json({ msg: 'Block not found' });
     }
-    
-    console.log('Block completed:', block._id); 
+
+    console.log('Block completed:', block._id);
     res.json(block);
-    
+
   } catch (err) {
-    console.error('Complete route error:', err); 
+    console.error('Complete route error:', err);
     res.status(500).json({ msg: err.message });
   }
 });
-// Helper: Reschedule a missed topic to next available slot
+
 const rescheduleMissedTopic = async (block, exam, userId) => {
   if (!exam) return 0;
-  
-  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-  
+
   // Find next available day starting tomorrow
   let nextDate = new Date();
   nextDate.setDate(nextDate.getDate() + 1);
   const nextDateStr = nextDate.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-  
-  // Get existing blocks for that day to avoid conflicts
+
   const existingBlocks = await StudyBlock.find({
     user: userId,
     date: nextDateStr,
     missed: false
   }).sort({ time: 1 });
-  
-  // Simple: schedule at 09:00 or after last block
+
   let startTime = '09:00';
   if (existingBlocks.length > 0) {
     const lastBlock = existingBlocks[existingBlocks.length - 1];
     const [h, m] = lastBlock.time.split(':').map(Number);
-    const totalMin = h * 60 + m + lastBlock.duration + 10; // +10 min break
+    const totalMin = h * 60 + m + lastBlock.duration + 10;
     const newH = Math.floor(totalMin / 60);
     const newM = totalMin % 60;
-    if (newH < 22) { // Don't go past 10pm
+    if (newH < 22) {
       startTime = `${String(newH).padStart(2,'0')}:${String(newM).padStart(2,'0')}`;
     }
   }
-  
-  // Create new block
+
   const newBlock = new StudyBlock({
     user: userId,
     examId: exam._id,
@@ -692,31 +742,30 @@ const rescheduleMissedTopic = async (block, exam, userId) => {
     color: block.color,
     rescheduledFrom: block._id
   });
-  
+
   await newBlock.save();
   return 1;
 };
+
 router.patch('/:id/missed', auth, async (req, res) => {
   try {
     const block = await StudyBlock.findOne({ _id: req.params.id, user: req.user._id });
-    
+
     if (!block) return res.status(404).json({ success: false, msg: 'Block not found' });
     if (block.missed) return res.status(400).json({ success: false, msg: 'Already marked as missed' });
     if (block.completed) return res.status(400).json({ success: false, msg: 'Already completed' });
 
-    // Mark as missed but DON'T delete - keep for history
     block.missed = true;
     block.missedAt = new Date();
     await block.save();
 
-    // Reschedule the topic to next available slot
     const exam = await Exam.findById(block.examId);
     const newBlocksCreated = await rescheduleMissedTopic(block, exam, req.user._id);
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       msg: 'Marked as missed and rescheduled',
-      newBlocksCreated 
+      newBlocksCreated
     });
 
   } catch (err) {
@@ -775,7 +824,7 @@ router.patch('/:id/pending', auth, async (req, res) => {
       { completed: false, missed: false },
       { new: true }
     );
-    if (!block) return res.status(404).json({ msg: 'Block not found' });
+        if (!block) return res.status(404).json({ msg: 'Block not found' });
     res.json(block);
   } catch (err) {
     console.error('Pending error:', err);

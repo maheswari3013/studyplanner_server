@@ -16,10 +16,26 @@ router.get('/', auth, async (req, res) => {
   }
 });
 
+// GET /api/exams/:id - Get single exam
+router.get('/:id', auth, async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ msg: 'Invalid exam ID' });
+    }
+    const exam = await Exam.findOne({ _id: req.params.id, user: req.user.id });
+    if (!exam) return res.status(404).json({ msg: 'Exam not found' });
+    res.json(exam);
+  } catch (err) {
+    console.error('Get exam error:', err.message);
+    res.status(500).json({ msg: 'Server error' });
+  }
+});
+
+// POST /api/exams - Create exam
 router.post('/', auth, async (req, res) => {
   try {
     const exam = new Exam({
-    ...req.body,
+      ...req.body,
       user: req.user.id
     });
     await exam.save();
@@ -30,28 +46,16 @@ router.post('/', auth, async (req, res) => {
   }
 });
 
-// PUT /api/exams/:id - Update exam
+// PUT /api/exams/:id - Update exam - MERGED VERSION
 router.put('/:id', auth, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(400).json({ msg: 'Invalid exam ID' });
     }
 
-    const exam = await Exam.findOne({ _id: req.params.id, user: req.user.id });
-    if (!exam) return res.status(404).json({ msg: 'Exam not found' });
-
-    Object.assign(exam, req.body);
-    await exam.save();
-    res.json(exam);
-  } catch (err) {
-    console.error('Update exam error:', err.message);
-    res.status(500).json({ msg: 'Server error' });
-  }
-});
-router.put('/:id', auth, async (req, res) => {
-  try {
     const { examDate, ...updateData } = req.body;
     
+    // Validate exam date not in past
     if (examDate) {
       const selectedDate = new Date(examDate);
       const today = new Date();
@@ -63,16 +67,18 @@ router.put('/:id', auth, async (req, res) => {
 
     const exam = await Exam.findOneAndUpdate(
       { _id: req.params.id, user: req.user.id },
-      { ...updateData, examDate },
+      { ...updateData, ...(examDate && { examDate }) },
       { new: true, runValidators: true }
     );
     
     if (!exam) return res.status(404).json({ msg: 'Exam not found' });
     res.json(exam);
   } catch (err) {
+    console.error('Update exam error:', err.message);
     res.status(500).json({ msg: 'Server Error', error: err.message });
   }
 });
+
 // DELETE /api/exams/:id - Delete exam + its study blocks
 router.delete('/:id', auth, async (req, res) => {
   try {
@@ -87,19 +93,24 @@ router.delete('/:id', auth, async (req, res) => {
     }
 
     // Delete all study blocks for this exam
-    await StudyBlock.deleteMany({ 
+    const deleteResult = await StudyBlock.deleteMany({ 
       user: req.user.id, 
       subject: exam.subject 
     });
 
     await Exam.findByIdAndDelete(req.params.id);
     
-    res.json({ msg: 'Exam and related study blocks deleted' });
+    res.json({ 
+      msg: 'Exam and related study blocks deleted',
+      deletedBlocks: deleteResult.deletedCount 
+    });
   } catch (err) {
     console.error('Delete exam error:', err);
     res.status(500).json({ msg: 'Server Error', error: err.message });
   }
 });
+
+// PATCH /api/exams/:id/confidence - Update confidence level
 router.patch('/:id/confidence', auth, async (req, res) => {
   try {
     const { level } = req.body;

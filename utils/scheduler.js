@@ -19,7 +19,7 @@ const normalizeTopics = (exam) => {
   }
   if (exam.totalHours >= 0) {
     const topicNames = exam.syllabusTopics?.length > 0
-     ? exam.syllabusTopics.filter(t => typeof t === 'string' && t.trim())
+    ? exam.syllabusTopics.filter(t => typeof t === 'string' && t.trim())
       : ['General'];
     const hoursPerTopic = exam.totalHours / topicNames.length;
     return topicNames.map(name => ({ name: name.trim(), hours: hoursPerTopic, missedHours: 0 }));
@@ -51,7 +51,7 @@ const isTimeOccupied = (date, startTime, duration, existingBlocks) => {
   });
 };
 
-// Handle overnight windows: 22:00-06:00 means 22,23,0,1,2,3,4,5
+// Error 1 & 7: Proper overnight window calculation
 const getMinutesInWindow = (startHour, endHour) => {
   if (startHour <= endHour) {
     return (endHour - startHour) * 60;
@@ -60,15 +60,19 @@ const getMinutesInWindow = (startHour, endHour) => {
   return ((24 - startHour) + endHour) * 60;
 };
 
-const addMinutesToTime = (timeStr, minutes, endHour = 24) => {
+// Error 1 & 2: Fixed overnight time addition
+const addMinutesToTime = (timeStr, minutes, endHour = 24, startHour = 0) => {
   let totalMins = timeToMinutes(timeStr) + minutes;
+  const isOvernight = startHour > endHour;
 
-  // For overnight, endHour can be > 24 like 30 for 6am next day
-  if (totalMins >= endHour * 60) {
+  // For overnight: allow going past 24:00
+  const limitMins = isOvernight? (24 * 60 + endHour * 60) : (endHour * 60);
+
+  if (totalMins >= limitMins) {
     return null;
   }
 
-  const h = Math.floor(totalMins / 60) % 24; // Use %24 only for display, not logic
+  const h = Math.floor(totalMins / 60) % 24;
   const m = totalMins % 60;
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 };
@@ -220,7 +224,6 @@ function generateSchedule(exams, config, existingBlocks = []) {
   });
 
   const isOvernight = startHour > endHour;
-  const effectiveEndHour = isOvernight? endHour + 24 : endHour;
 
   for (const topic of sortedTopics) {
     let hoursToSchedule = topic.hoursRemaining;
@@ -244,16 +247,16 @@ function generateSchedule(exams, config, existingBlocks = []) {
       let currentTime = `${String(startHour).padStart(2, '0')}:00`;
 
       while (hoursToSchedule >= MIN_BLOCK_HOURS && examDayRemaining >= MIN_BLOCK_HOURS) {
-        // Calculate study end time - stop if null
-        const studyEndTime = addMinutesToTime(currentTime, studyMinutes, effectiveEndHour);
-        if (!studyEndTime) break; // Hit end of day
+        // Error 1 & 2: Pass startHour for overnight handling
+        const studyEndTime = addMinutesToTime(currentTime, studyMinutes, endHour, startHour);
+        if (!studyEndTime) break;
 
         const actualStudyHours = Math.min(blockHours, hoursToSchedule, examDayRemaining);
         const actualStudyMinutes = Math.round(actualStudyHours * 60);
         if (actualStudyMinutes < MIN_BLOCK_HOURS * 60) break;
 
         if (isTimeOccupied(day.date, currentTime, actualStudyMinutes, existingBlocks)) {
-          currentTime = addMinutesToTime(currentTime, 10, effectiveEndHour);
+          currentTime = addMinutesToTime(currentTime, 10, endHour, startHour);
           if (!currentTime) break;
           continue;
         }
@@ -279,11 +282,10 @@ function generateSchedule(exams, config, existingBlocks = []) {
         examDayRemaining -= actualStudyHours;
         currentTime = studyEndTime;
 
-        // Add break if there's time and hours left
         const canAddBreak = examDayRemaining > 0.01 && hoursToSchedule > 0;
         if (canAddBreak) {
-          const breakEndTime = addMinutesToTime(currentTime, breakMinutes, effectiveEndHour);
-          if (!breakEndTime) break; // Can't fit break
+          const breakEndTime = addMinutesToTime(currentTime, breakMinutes, endHour, startHour);
+          if (!breakEndTime) break;
 
           if (!isTimeOccupied(day.date, currentTime, breakMinutes, existingBlocks)) {
             day.sessions.push({
@@ -329,7 +331,7 @@ function generateSchedule(exams, config, existingBlocks = []) {
     sessions: day.sessions.sort((a, b) => {
       const aMins = timeToMinutes(a.startTime);
       const bMins = timeToMinutes(b.startTime);
-      // Handle overnight sorting: 23:00 should come before 01:00 if overnight
+      // Error 1: Handle overnight sorting - 23:00 should come before 01:00
       if (isOvernight) {
         const aAdjusted = aMins < startHour * 60? aMins + 1440 : aMins;
         const bAdjusted = bMins < startHour * 60? bMins + 1440 : bMins;
