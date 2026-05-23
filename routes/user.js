@@ -4,8 +4,27 @@ const mongoose = require('mongoose');
 const auth = require('../middleware/auth');
 const StudyBlock = require('../models/StudyBlock');
 const Exam = require('../models/Exam');
+const User = require('../models/User');
 
 
+// GET /api/user/me - Current user profile summary
+router.get('/me', auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).select('-password');
+    if (!user) return res.status(404).json({ msg: 'User not found' });
+
+    res.json({
+      _id: user._id,
+      email: user.email,
+      name: user.name || user.username,
+      googleId: user.googleId,
+      hasCalendar: !!user.googleRefreshToken
+    });
+  } catch (err) {
+    console.error('User me error:', err.message);
+    res.status(500).json({ msg: 'Server error' });
+  }
+});
 
 // GET /api/user/stats - For dashboard stat cards
 router.get('/user/stats', auth, async (req, res) => {

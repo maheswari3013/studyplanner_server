@@ -10,15 +10,17 @@ module.exports = async function(req, res, next) {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const userId = decoded.id || decoded.user?.id;
+    const userId = decoded.id || decoded._id || decoded.user?.id || decoded.user?._id;
     if (!userId) {
       return res.status(401).json({ msg: 'Invalid token payload' });
     }
       
-    req.user = { 
-  id: userId,
-  role: decoded.role,   
-  email: decoded.email  };
+    req.user = {
+      id: userId,
+      _id: userId,
+      role: decoded.role,
+      email: decoded.email
+    };
     
     await User.findByIdAndUpdate(userId, { lastActive: new Date() });
     next();

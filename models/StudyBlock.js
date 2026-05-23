@@ -68,8 +68,13 @@ const StudyBlockSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['scheduled', 'completed', 'missed', 'overdue'],
+    enum: ['scheduled', 'completed', 'missed', 'overdue', 'makeup'],
     default: 'scheduled'
+  },
+  originalStartTime: String,
+  missedFromId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'StudyBlock'
   },
   actualDuration: { type: Number, default: 0 },
   loggedAt: Date,

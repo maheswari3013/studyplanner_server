@@ -201,9 +201,11 @@ const startCronJobs = () => {
 };
 
 // ===== ROUTES =====
+app.use('/api/auth', require('./routes/auth'));
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/exams', require('./routes/examRoutes'));
 app.use('/api/schedule', require('./routes/scheduleRoutes'));
+app.use('/api/blocks', require('./routes/blockRoutes'));
 app.use('/api/user', require('./routes/user'));
 app.use('/api/admin', require('./routes/adminRoutes'));
 app.use('/api/notifications', require('./routes/notificationRoutes'));
