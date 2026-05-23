@@ -171,7 +171,8 @@ router.get('/user/me', authMiddleware, async (req, res) => {
     email: user.email,
     name: user.name || user.username,
     googleId: user.googleId,
-    hasCalendar: !!user.googleRefreshToken
+    hasCalendar: !!user.googleRefreshToken,
+    role: user.role
   });
 });
 

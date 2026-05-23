@@ -3,7 +3,10 @@ const User = require('../models/User');
 
 module.exports = async function(req, res, next) {
   const authHeader = req.header('Authorization');
-  const token = authHeader?.replace('Bearer ', '');
+  let token = authHeader?.replace('Bearer ', '');
+  if (!token && req.query.token) {
+    token = req.query.token;
+  }
   if (!token) {
     return res.status(401).json({ msg: 'No token, authorization denied' });
   }
