@@ -693,6 +693,70 @@ router.post('/google/sync', auth, syncLimiter, async (req, res) => {
   }
 });
 
+router.get('/google/sync', auth, syncLimiter, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id || req.user.id);
+
+    if (!user?.googleRefreshToken) {
+      return res.status(400).json({
+        success: false,
+        message: 'Google Calendar not connected',
+        action: 'CONNECT_CALENDAR',
+        connectUrl: '/api/auth/google/calendar'
+      });
+    }
+
+    const oauth2Client = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET,
+      process.env.GOOGLE_CALENDAR_CALLBACK || process.env.GOOGLE_CALENDAR_CALLBACK_URL
+    );
+
+    oauth2Client.setCredentials({ refresh_token: user.googleRefreshToken });
+    const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const sevenDaysFromNow = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+      .toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+
+    const blocks = await StudyBlock.find({
+      user: req.user._id || req.user.id,
+      date: { $gte: today, $lte: sevenDaysFromNow },
+      isBreak: false,
+      missed: false,
+      completed: false
+    }).sort({ date: 1, time: 1 });
+
+    const events = [];
+    for (const block of blocks) {
+      const start = new Date(`${block.date}T${block.time}:00+05:30`);
+      if (start < new Date()) continue;
+
+      const end = new Date(start);
+      end.setMinutes(end.getMinutes() + block.duration);
+
+      const event = {
+        summary: `${block.subject || 'Study Block'}${block.topic ? ` - ${block.topic}` : ''}`,
+        description: `StudyPlanner block ${block._id}`,
+        start: { dateTime: start.toISOString(), timeZone: 'Asia/Kolkata' },
+        end: { dateTime: end.toISOString(), timeZone: 'Asia/Kolkata' },
+        extendedProperties: { private: { studyPlannerBlockId: block._id.toString() } }
+      };
+
+      const created = await calendar.events.insert({
+        calendarId: 'primary',
+        requestBody: event
+      });
+      events.push(created.data.id);
+    }
+
+    res.json({ success: true, synced: events.length });
+  } catch (err) {
+    console.error('Google Calendar GET sync error:', err.response?.data || err.message);
+    res.status(500).json({ success: false, message: getGoogleErrorMessage(err) });
+  }
+});
+
 router.delete('/clear-all', auth, async (req, res) => {
   try {
     const result = await StudyBlock.deleteMany({ user: req.user.id });
