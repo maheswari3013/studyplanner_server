@@ -5,7 +5,10 @@ const jwt = require('jsonwebtoken');
 const authMiddleware = require('../middleware/auth');
 const User = require('../models/User');
 
-const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+const client = new OAuth2Client(
+  process.env.GOOGLE_CLIENT_ID,
+  process.env.GOOGLE_CLIENT_SECRET
+);
 
 const clientUrl = process.env.CLIENT_URL || process.env.FRONTEND_URL || 'https://studyplanner-client.vercel.app';
 const googleCallbackUrl = process.env.GOOGLE_CALLBACK_URL || process.env.GOOGLE_REDIRECT_URI;
