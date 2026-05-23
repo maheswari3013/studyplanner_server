@@ -201,6 +201,16 @@ const startCronJobs = () => {
 };
 
 // ===== ROUTES =====
+// Redirect legacy/misconfigured Google OAuth callbacks to correct endpoints
+app.get('/api/schedule/google/callback', (req, res) => {
+  const query = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '';
+  res.redirect(`/api/auth/google/callback${query}`);
+});
+app.get('/api/schedule/google/calendar/callback', (req, res) => {
+  const query = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '';
+  res.redirect(`/api/auth/google/calendar/callback${query}`);
+});
+
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/exams', require('./routes/examRoutes'));
