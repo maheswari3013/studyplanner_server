@@ -23,9 +23,10 @@ router.get('/health', async (req, res) => {
       db: dbState[mongoose.connection.readyState],
       uptime: Math.floor(process.uptime() / 60),
       memory: {
-        used: Math.round(memUsage.heapUsed / 1024 / 1024),
-        total: Math.round(memUsage.heapTotal / 1024 / 1024),
-        rss: Math.round(memUsage.rss / 1024 / 1024)
+        memoryUsed: Number((memUsage.heapUsed / 1024 / 1024 / 1024).toFixed(2)),
+        total: Number((memUsage.heapTotal / 1024 / 1024 / 1024).toFixed(2)),
+        rss: Number((memUsage.rss / 1024 / 1024 / 1024).toFixed(2)),
+        unit: 'GB'
       },
       cpu: os.loadavg()[0].toFixed(2),
       nodeVersion: process.version,

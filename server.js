@@ -2,13 +2,15 @@ const express = require('express');
 const cors = require('cors');
 const cron = require('node-cron');
 const webpush = require('web-push');
+require('dotenv').config();
 const connectDB = require('./config/db');
 const StudyBlock = require('./models/StudyBlock');
 const Exam = require('./models/Exam');
 const User = require('./models/User');
 const { generateSchedule } = require('./utils/scheduler');
+const { markPastPendingBlocksOverdue } = require('./controllers/scheduleController');
 const errorHandler = require('./middleware/errorHandler');
-require('dotenv').config();
+const passport = require('./config/passport');
 
 const app = express();
 
@@ -41,6 +43,7 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
+app.use(passport.initialize());
 
 // ===== HELPERS =====
 const istToUtc = (timeStr) => {
@@ -98,14 +101,14 @@ const startCronJobs = () => {
         if (now > blockEnd) {
           console.log(`OVERDUE: ${block.subject} ${block.time}`);
 
-          // Mark as missed + notified
+          // Mark as overdue + notified; the 1-minute cron handles rescheduling.
           await StudyBlock.updateOne(
             { _id: block._id },
             {
               notifiedOverdue: true,
-              missed: true,
+              missed: false,
               missedAt: new Date(),
-              status: 'missed'
+              status: 'overdue'
             }
           );
 
@@ -186,102 +189,11 @@ const startCronJobs = () => {
     timezone: 'Asia/Kolkata'
   });
 
-  // 3. AUTO-RESCHEDULE CRON - every 1 min (your existing logic)
+  // 3. AUTO-RESCHEDULE CRON - every 1 min
   cron.schedule('*/1 * * * *', async () => {
     try {
-      const now = new Date();
-      const today = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-
-      const blocks = await StudyBlock.find({
-        date: today,
-        completed: false,
-        missed: false,
-        isBreak: false,
-        notifiedOverdue: true // Only process already-notified blocks
-      });
-
-      const overdueBlocks = [];
-      for (const block of blocks) {
-        const blockStart = new Date(`${block.date}T${block.time}:00+05:30`);
-        const blockEnd = new Date(blockStart);
-        blockEnd.setMinutes(blockEnd.getMinutes() + block.duration);
-
-        if (now > blockEnd) {
-          if (!block.examId) {
-            console.log(`SKIP: ${block.subject} ${block.time} - no examId`);
-            continue;
-          }
-          overdueBlocks.push(block);
-        }
-      }
-
-      if (overdueBlocks.length === 0) return;
-
-      const userIds = [...new Set(overdueBlocks.map(b => b.user.toString()))];
-
-      for (const userId of userIds) {
-        try {
-          const exams = await Exam.find({ user: userId });
-          if (exams.length === 0) continue;
-
-          const daysToSchedule = calculateDaysToSchedule(exams);
-
-          const config = {
-            startDate: new Date(),
-            startHour: 0,
-            endHour: 23,
-            studyBlock: exams[0]?.breakRatio?.study || 50,
-            breakBlock: exams[0]?.breakRatio?.break || 10,
-            daysToSchedule: daysToSchedule,
-            breakRatio: exams[0]?.breakRatio || { study: 50, break: 10 }
-          };
-
-          const existingBlocks = await StudyBlock.find({
-            user: userId,
-            date: { $gte: today },
-            $or: [{ isGenerated: false }, { completed: true }, { missed: true }]
-          });
-
-          await StudyBlock.deleteMany({
-            user: userId,
-            date: { $gte: today },
-            isGenerated: true,
-            completed: false,
-            missed: false
-          });
-
-          const result = generateSchedule(exams, config, existingBlocks);
-
-          if (result.conflicts?.length === 0) {
-            const newBlocks = result.schedule.flatMap(d => d.sessions.map(s => ({
-              user: userId,
-              examId: exams.find(e => e.subject === s.examName)?._id,
-              subject: s.examName,
-              topic: s.topicName,
-              date: s.date,
-              time: s.startTime,
-              startTime: istToUtc(s.startTime),
-              duration: s.duration,
-              isGenerated: true,
-              isBreak: s.isBreak || false,
-              type: s.type || 'Study',
-              intervalDay: s.intervalDay,
-              priority: s.priority,
-              color: s.color,
-              completed: false,
-              missed: false,
-              notifiedOverdue: false
-            })));
-
-            if (newBlocks.length > 0) {
-              await StudyBlock.insertMany(newBlocks);
-              console.log(`Created ${newBlocks.length} new blocks for user ${userId}`);
-            }
-          }
-        } catch (userErr) {
-          console.error(`Error for user ${userId}:`, userErr.message);
-        }
-      }
+      const results = await markPastPendingBlocksOverdue();
+      if (results.length > 0) console.log(`Marked/rescheduled ${results.length} overdue blocks`);
     } catch (err) {
       console.error('Reschedule cron error:', err.message);
     }
@@ -295,6 +207,7 @@ app.use('/api/schedule', require('./routes/scheduleRoutes'));
 app.use('/api/user', require('./routes/user'));
 app.use('/api/admin', require('./routes/adminRoutes'));
 app.use('/api/notifications', require('./routes/notificationRoutes'));
+app.use('/api/stats', require('./routes/stats'));
 
 app.get('/', (req, res) => res.send('API Running'));
 app.get('/api/schedule/test', (req, res) => res.json({ works: true }));

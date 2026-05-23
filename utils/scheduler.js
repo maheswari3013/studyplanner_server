@@ -128,6 +128,7 @@ function generateSchedule(exams, config, existingBlocks = []) {
       date: dateStr,
       dateObj: new Date(currentDate),
       sessions: [],
+      occupiedSlots: [],
       usedHours: 0,
       examCaps: {},
       totalAvailable: 0,
@@ -164,6 +165,12 @@ function generateSchedule(exams, config, existingBlocks = []) {
   existingBlocks.forEach(block => {
     const day = availableDaysMap.get(block.date);
     if (day && block.status!== 'missed' && block.status!== 'overdue') {
+      day.occupiedSlots.push({
+        date: block.date,
+        startTime: block.time || block.startTime,
+        duration: block.duration,
+        status: block.status
+      });
       const examCap = Object.values(day.examCaps).find(ec => ec.subject === block.subject);
       if (examCap) {
         examCap.used += block.duration / 60;
@@ -295,9 +302,9 @@ function generateSchedule(exams, config, existingBlocks = []) {
 
           const canAddBreak = examDayRemaining > MIN_BLOCK_HOURS && hoursToSchedule > MIN_BLOCK_HOURS;
           if (!canAddBreak) break;
-          if (isTimeOccupied(day.date, breakStartTime, breakMinutes, existingBlocks, day.sessions)) break;
+          if (isTimeOccupied(day.date, breakStartTime, breakMinutes, [], day.occupiedSlots)) break;
 
-          day.sessions.push({
+          const breakSession = {
             type: 'Break',
             examId: topic.examId,
             examName: topic.examName,
@@ -309,7 +316,9 @@ function generateSchedule(exams, config, existingBlocks = []) {
             duration: breakMinutes,
             isBreak: true,
             isGenerated: true
-          });
+          };
+          day.sessions.push(breakSession);
+          day.occupiedSlots.push(breakSession);
 
           const actualBreakHours = Math.min(breakHours, examDayRemaining);
           examCap.used += actualBreakHours;
@@ -327,13 +336,13 @@ function generateSchedule(exams, config, existingBlocks = []) {
         const actualStudyMinutes = Math.round(actualStudyHours * 60);
         if (actualStudyMinutes < MIN_BLOCK_HOURS * 60) break;
 
-        if (isTimeOccupied(day.date, currentTime, actualStudyMinutes, existingBlocks, day.sessions)) {
+        if (isTimeOccupied(day.date, currentTime, actualStudyMinutes, [], day.occupiedSlots)) {
           currentTime = addMinutesToTime(currentTime, 10, endHour, startHour);
           if (!currentTime) break;
           continue;
         }
 
-        day.sessions.push({
+        const studySession = {
           type: 'Study',
           examId: topic.examId,
           examName: topic.examName,
@@ -346,7 +355,9 @@ function generateSchedule(exams, config, existingBlocks = []) {
           duration: actualStudyMinutes,
           isBreak: false,
           isGenerated: true
-        });
+        };
+        day.sessions.push(studySession);
+        day.occupiedSlots.push(studySession);
 
         examCap.used += actualStudyHours;
         day.usedHours += actualStudyHours;

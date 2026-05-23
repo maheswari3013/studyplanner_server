@@ -10,6 +10,7 @@ const StudyBlock = require('../models/StudyBlock');
 const { generateSchedule } = require('../utils/scheduler');
 const rateLimit = require('express-rate-limit');
 const PDFDocument = require('pdfkit');
+const { completeBlock, missBlock } = require('../controllers/scheduleController');
 
 const pdfLimiter = rateLimit({ windowMs: 60 * 1000, max: 5, message: { msg: 'Too many PDF exports. Try again in 1 minute.' } });
 const syncLimiter = rateLimit({ windowMs: 60 * 1000, max: 3, message: { msg: 'Too many syncs. Try again in 1 minute.' } });
@@ -30,6 +31,22 @@ const getOAuth2Client = () => new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_SECRET,
   process.env.GOOGLE_REDIRECT_URI || process.env.GOOGLE_CALLBACK_URL // Error 5: Fallback for env var
 );
+
+const getGoogleErrorMessage = (err) => {
+  const data = err?.response?.data;
+  if (typeof data?.error === 'string') return data.error_description || data.error;
+  if (data?.error?.message) return data.error.message;
+  if (data?.message) return data.message;
+  return err.message || 'Google API error';
+};
+
+const getStoredGoogleCredentials = (user) => ({
+  access_token: user.googleAccessToken || user.googleTokens?.access_token,
+  refresh_token: user.googleRefreshToken || user.googleTokens?.refresh_token,
+  expiry_date: user.googleTokenExpiry || user.googleTokens?.expiry_date,
+  scope: user.googleTokens?.scope,
+  token_type: user.googleTokens?.token_type || 'Bearer'
+});
 
 // ===== STATIC GET ROUTES FIRST =====
 
@@ -65,6 +82,7 @@ router.get('/today', auth, async (req, res) => {
         if (currentMinutes > blockMinutes) {
           block.missed = true;
           block.missedAt = new Date();
+          block.status = 'missed';
           await block.save();
         }
       }
@@ -393,8 +411,9 @@ router.get('/pending', auth, async (req, res) => {
 router.get('/google/status', auth, async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
+    const credentials = getStoredGoogleCredentials(user);
     res.json({
-      connected:!!user.googleTokens?.refresh_token
+      connected: !!credentials.refresh_token
     });
   } catch (err) {
     res.status(500).json({ connected: false });
@@ -570,7 +589,8 @@ router.post('/generate', auth, async (req, res) => {
         priority: s.priority,
         color: s.color,
         completed: false,
-        missed: false
+        missed: false,
+        status: 'scheduled'
       }))
     );
 
@@ -595,18 +615,32 @@ router.post('/generate', auth, async (req, res) => {
 router.post('/google/sync', auth, syncLimiter, async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
-    if (!user.googleTokens || !user.googleTokens.access_token || !user.googleTokens.refresh_token) {
+    const credentials = getStoredGoogleCredentials(user);
+    if (!credentials.access_token || !credentials.refresh_token) {
       return res.status(400).json({ success: false, msg: 'Google not connected', needsAuth: true });
     }
 
     const oauth2Client = getOAuth2Client();
-    oauth2Client.setCredentials(user.googleTokens);
+    oauth2Client.setCredentials(credentials);
 
     try {
-      const refreshResult = await oauth2Client.refreshAccessToken();
-      const credentials = refreshResult?.credentials || refreshResult;
-      await User.findByIdAndUpdate(req.user.id, { googleTokens: credentials });
-      oauth2Client.setCredentials(credentials);
+      let activeCredentials = credentials;
+      const expiresSoon = !activeCredentials.expiry_date || activeCredentials.expiry_date <= Date.now() + 60 * 1000;
+      if (expiresSoon) {
+        const { credentials: refreshedCredentials } = await oauth2Client.refreshAccessToken();
+        activeCredentials = {
+          ...activeCredentials,
+          ...refreshedCredentials,
+          refresh_token: refreshedCredentials.refresh_token || activeCredentials.refresh_token
+        };
+        await User.findByIdAndUpdate(req.user.id, {
+          googleAccessToken: activeCredentials.access_token,
+          googleRefreshToken: activeCredentials.refresh_token,
+          googleTokenExpiry: activeCredentials.expiry_date,
+          googleTokens: activeCredentials
+        });
+        oauth2Client.setCredentials(activeCredentials);
+      }
 
       const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
       const blocks = await StudyBlock.find({ user: req.user.id, isBreak: false, missed: false, completed: false });
@@ -632,21 +666,26 @@ router.post('/google/sync', auth, syncLimiter, async (req, res) => {
           }
           synced++;
         } catch (e) {
-          console.error('Google event sync error:', e);
+          const eventErrorMessage = getGoogleErrorMessage(e);
+          console.error('Google event sync error:', eventErrorMessage);
+          if (e?.code >= 400 && e.code < 500) {
+            return res.status(e.code).json({ success: false, msg: eventErrorMessage, error: eventErrorMessage });
+          }
           errors++;
         }
       }
       return res.json({ success: true, msg: `Synced ${synced} events${errors > 0? `, ${errors} failed` : ''}` });
     } catch (googleErr) {
-      console.error('Google sync error:', googleErr);
-      const errorCode = googleErr?.response?.data?.error || googleErr?.code || googleErr?.message;
+      const googleMessage = getGoogleErrorMessage(googleErr);
+      console.error('Google sync error:', googleMessage);
+      const errorCode = googleErr?.response?.data?.error || googleErr?.code || googleMessage;
       const invalidGrant = String(errorCode).includes('invalid_grant');
       const unauthorized = googleErr?.code === 401 || String(errorCode) === '401';
       if (invalidGrant || unauthorized) {
-        await User.findByIdAndUpdate(req.user.id, { $unset: { googleTokens: 1 } });
-        return res.status(400).json({ success: false, msg: 'Token expired', needsAuth: true });
+        await User.findByIdAndUpdate(req.user.id, { $unset: { googleTokens: 1, googleAccessToken: 1, googleRefreshToken: 1, googleTokenExpiry: 1 } });
+        return res.status(400).json({ success: false, msg: googleMessage, needsAuth: true });
       }
-      return res.status(500).json({ success: false, msg: 'Sync failed', error: googleErr.message });
+      return res.status(googleErr?.code >= 400 && googleErr.code < 500 ? googleErr.code : 500).json({ success: false, msg: googleMessage, error: googleMessage });
     }
   } catch (err) {
     console.error('Google sync route error:', err);
@@ -664,7 +703,7 @@ router.delete('/clear-all', auth, async (req, res) => {
 });
 
 router.delete('/google/disconnect', auth, async (req, res) => {
-  await User.findByIdAndUpdate(req.user.id, { $unset: { googleTokens: 1 } });
+  await User.findByIdAndUpdate(req.user.id, { $unset: { googleTokens: 1, googleAccessToken: 1, googleRefreshToken: 1, googleTokenExpiry: 1 } });
   res.json({ msg: 'Google Calendar disconnected' });
 });
 
@@ -701,106 +740,10 @@ router.patch('/exams/:id/confidence', auth, async (req, res) => {
 
 // ===== PARAMETERIZED ROUTES LAST =====
 
-const completeBlockHandler = async (req, res) => {
-  try {
-    console.log('Completing block:', req.params.id);
-
-    const block = await StudyBlock.findOneAndUpdate(
-      { _id: req.params.id, user: req.user._id },
-      { completed: true, missed: false, completedAt: new Date() },
-      { new: true }
-    );
-
-    if (!block) {
-      console.log('Block not found:', req.params.id);
-      return res.status(404).json({ msg: 'Block not found' });
-    }
-
-    console.log('Block completed:', block._id);
-    return res.json(block);
-  } catch (err) {
-    console.error('Complete route error:', err);
-    return res.status(500).json({ msg: err.message });
-  }
-};
-
-router.patch('/:id/complete', auth, completeBlockHandler);
-router.post('/:id/complete', auth, completeBlockHandler);
-
-const rescheduleMissedTopic = async (block, exam, userId) => {
-  if (!exam) return 0;
-
-  // Find next available day starting tomorrow
-  let nextDate = new Date();
-  nextDate.setDate(nextDate.getDate() + 1);
-  const nextDateStr = nextDate.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-
-  const existingBlocks = await StudyBlock.find({
-    user: userId,
-    date: nextDateStr,
-    missed: false
-  }).sort({ time: 1 });
-
-  let startTime = '09:00';
-  if (existingBlocks.length > 0) {
-    const lastBlock = existingBlocks[existingBlocks.length - 1];
-    const [h, m] = lastBlock.time.split(':').map(Number);
-    const totalMin = h * 60 + m + lastBlock.duration + 10;
-    const newH = Math.floor(totalMin / 60);
-    const newM = totalMin % 60;
-    if (newH < 22) {
-      startTime = `${String(newH).padStart(2,'0')}:${String(newM).padStart(2,'0')}`;
-    }
-  }
-
-  const newBlock = new StudyBlock({
-    user: userId,
-    examId: exam._id,
-    subject: block.subject,
-    topic: block.topic + ' (Makeup)',
-    date: nextDateStr,
-    time: startTime,
-    startTime: istToUtc(startTime),
-    duration: block.duration,
-    isGenerated: true,
-    type: block.type,
-    priority: block.priority,
-    color: block.color,
-    rescheduledFrom: block._id
-  });
-
-  await newBlock.save();
-  return 1;
-};
-
-const missedBlockHandler = async (req, res) => {
-  try {
-    const block = await StudyBlock.findOne({ _id: req.params.id, user: req.user._id });
-
-    if (!block) return res.status(404).json({ success: false, msg: 'Block not found' });
-    if (block.missed) return res.status(400).json({ success: false, msg: 'Already marked as missed' });
-    if (block.completed) return res.status(400).json({ success: false, msg: 'Already completed' });
-
-    block.missed = true;
-    block.missedAt = new Date();
-    await block.save();
-
-    const exam = await Exam.findById(block.examId);
-    const newBlocksCreated = await rescheduleMissedTopic(block, exam, req.user._id);
-
-    return res.json({
-      success: true,
-      msg: 'Marked as missed and rescheduled',
-      newBlocksCreated
-    });
-  } catch (err) {
-    console.error('Missed route error:', err);
-    return res.status(500).json({ success: false, msg: err.message });
-  }
-};
-
-router.patch('/:id/missed', auth, missedBlockHandler);
-router.post('/:id/missed', auth, missedBlockHandler);
+router.patch('/:id/complete', auth, completeBlock);
+router.post('/:id/complete', auth, completeBlock);
+router.patch('/:id/missed', auth, missBlock);
+router.post('/:id/missed', auth, missBlock);
 
 router.post('/:id/start', auth, async (req, res) => {
   try {
@@ -849,7 +792,7 @@ router.patch('/:id/pending', auth, async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(400).json({ msg: 'Invalid block ID' });
     const block = await StudyBlock.findOneAndUpdate(
       { _id: req.params.id, user: req.user.id },
-      { completed: false, missed: false },
+      { $set: { completed: false, missed: false, status: 'scheduled' }, $unset: { completedAt: 1, missedAt: 1 } },
       { new: true }
     );
         if (!block) return res.status(404).json({ msg: 'Block not found' });

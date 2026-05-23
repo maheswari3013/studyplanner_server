@@ -2,19 +2,25 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { google } = require('googleapis');
+const passport = require('../config/passport');
 const User = require('../models/User');
 const OTP = require('../models/OTP');
 const auth = require('../middleware/auth');
 const { sendOTPEmail } = require('../utils/sendEmail');
 
-const frontendOrigin = process.env.FRONTEND_URL || 'https://studyplanner-client.vercel.app';
-const getOAuth2Client = () => new google.auth.OAuth2(
-  process.env.GOOGLE_CLIENT_ID,
-  process.env.GOOGLE_CLIENT_SECRET,
-  process.env.GOOGLE_REDIRECT_URI || process.env.GOOGLE_CALLBACK_URL
+const frontendOrigin = 'https://studyplanner-client.vercel.app';
+const signToken = (user) => jwt.sign(
+  { id: user._id, email: user.email, role: user.role },
+  process.env.JWT_SECRET,
+  { expiresIn: '5d' }
 );
-
+const escapeScriptValue = (value = '') => String(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+const sendOAuthSuccess = (res, token) => {
+  res.send(`<script>window.opener.postMessage({type:'success',token:'${escapeScriptValue(token)}'},'${frontendOrigin}');window.close()</script>`);
+};
+const sendOAuthError = (res, error, status = 500) => {
+  res.status(status).send(`<script>window.opener.postMessage({type:'error',error:'${escapeScriptValue(error)}'},'${frontendOrigin}');window.close()</script>`);
+};
 
 const validatePassword = (password) => {
   const regex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{6,}$/;
@@ -111,6 +117,7 @@ router.post('/login', async (req, res) => {
   try {
     const user = await User.findOne({ email });
     if (!user) return res.status(400).json({ msg: 'Invalid credentials' });
+    if (!user.password) return res.status(400).json({ msg: 'Use Google login for this account' });
 
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) return res.status(400).json({ msg: 'Invalid credentials' });
@@ -205,6 +212,62 @@ router.get('/user', auth, async (req, res) => {
     console.error(err.message);
     res.status(500).send('Server Error');
   }
+});
+
+router.get('/google/login', passport.authenticate('google-login', {
+  scope: ['profile', 'email'],
+  session: false
+}));
+
+router.get('/google/login/callback', (req, res, next) => {
+  passport.authenticate('google-login', { session: false }, (err, user) => {
+    if (err || !user) return sendOAuthError(res, err?.message || 'Google login failed', 401);
+    return sendOAuthSuccess(res, signToken(user));
+  })(req, res, next);
+});
+
+router.get('/google/calendar', auth, (req, res, next) => {
+  const state = jwt.sign(
+    { id: req.user.id, purpose: 'google-calendar' },
+    process.env.JWT_SECRET,
+    { expiresIn: '10m' }
+  );
+
+  passport.authenticate('google-calendar', {
+    scope: ['https://www.googleapis.com/auth/calendar.events'],
+    accessType: 'offline',
+    prompt: 'consent',
+    state,
+    session: false
+  })(req, res, next);
+});
+
+router.get('/google/calendar/callback', (req, res, next) => {
+  passport.authenticate('google-calendar', { session: false }, async (err, data) => {
+    try {
+      if (err || !data) return sendOAuthError(res, err?.message || 'Google Calendar auth failed', 401);
+      if (!req.query.state) return sendOAuthError(res, 'Missing state', 400);
+
+      const state = jwt.verify(req.query.state, process.env.JWT_SECRET);
+      if (state.purpose !== 'google-calendar') return sendOAuthError(res, 'Invalid state', 400);
+
+      const update = {
+        googleAccessToken: data.tokens.access_token,
+        googleTokenExpiry: data.tokens.expiry_date,
+        googleTokens: data.tokens
+      };
+      if (data.tokens.refresh_token) {
+        update.googleRefreshToken = data.tokens.refresh_token;
+      }
+
+      const user = await User.findByIdAndUpdate(state.id, { $set: update }, { new: true });
+      if (!user) return sendOAuthError(res, 'User not found', 404);
+
+      return sendOAuthSuccess(res, signToken(user));
+    } catch (callbackErr) {
+      return sendOAuthError(res, callbackErr.message, 401);
+    }
+  })(req, res, next);
 });
 
 // PATCH /api/auth/profile
@@ -370,46 +433,6 @@ router.patch('/confirm-email-change', auth, async (req, res) => {
   } catch (err) {
     console.error('Confirm email change error:', err.message);
     res.status(500).json({ msg: 'Server error' });
-  }
-});
-
-router.get('/google/callback', async (req, res) => {
-  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
-  res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
-
-  try {
-    const { code, state } = req.query;
-    if (!code || !state) {
-      return res.status(400).send(`
-        <script>
-          window.opener.postMessage({ type: 'google-auth-error', error: 'Missing code or state' }, '*');
-          window.close();
-        </script>
-        <h2>Missing code or state</h2>
-      `);
-    }
-
-    const oauth2Client = getOAuth2Client();
-    const { tokens } = await oauth2Client.getToken(code);
-    await User.findByIdAndUpdate(state, { googleTokens: tokens });
-
-    res.send(`
-      <script>
-        window.opener.postMessage({ type: 'google-auth-success' }, '${frontendOrigin}');
-        window.close();
-      </script>
-      <h2>Connected! You can close this window.</h2>
-    `);
-  } catch (err) {
-    console.error('Auth callback error:', err.response?.data || err.message);
-    const errorMessage = String(err.message).replace(/'/g, "\\'");
-    res.status(500).send(`
-      <script>
-        window.opener.postMessage({ type: 'google-auth-error', error: '${errorMessage}' }, '*');
-        window.close();
-      </script>
-      <h2>Auth failed</h2><p>${errorMessage}</p>
-    `);
   }
 });
 

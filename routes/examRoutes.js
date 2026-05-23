@@ -16,6 +16,46 @@ router.get('/', auth, async (req, res) => {
   }
 });
 
+// PATCH /api/exams/reorder - Persist drag/drop order
+router.patch('/reorder', auth, async (req, res) => {
+  try {
+    const { orderedIds } = req.body;
+    const userId = req.user.id || req.user._id;
+
+    if (!Array.isArray(orderedIds) || orderedIds.length === 0) {
+      return res.status(400).json({ msg: 'orderedIds must be a non-empty array' });
+    }
+
+    const uniqueIds = new Set(orderedIds);
+    if (uniqueIds.size !== orderedIds.length) {
+      return res.status(400).json({ msg: 'orderedIds must not contain duplicates' });
+    }
+
+    const hasInvalidId = orderedIds.some(id => !mongoose.Types.ObjectId.isValid(id));
+    if (hasInvalidId) {
+      return res.status(400).json({ msg: 'Invalid exam ID' });
+    }
+
+    const ownedCount = await Exam.countDocuments({
+      _id: { $in: orderedIds },
+      user: userId
+    });
+
+    if (ownedCount !== orderedIds.length) {
+      return res.status(400).json({ msg: 'One or more exam IDs are invalid' });
+    }
+
+    for (const [index, id] of orderedIds.entries()) {
+      await Exam.findByIdAndUpdate(id, { priority: index });
+    }
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('Reorder exams error:', err.message);
+    return res.status(500).json({ msg: 'Server error' });
+  }
+});
+
 // GET /api/exams/:id - Get single exam
 router.get('/:id', auth, async (req, res) => {
   try {
