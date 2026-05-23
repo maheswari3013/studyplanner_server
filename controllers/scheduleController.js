@@ -55,7 +55,7 @@ const findSameDaySlot = async (block) => {
     _id: { $ne: block._id },
     missed: false,
     completed: false,
-    status: { $ne: 'missed' }
+        status: { $nin: ['missed'] }
   }).sort({ time: 1 });
 
   for (let candidate = dayStart; candidate + block.duration <= 23 * 60; candidate += 10) {
@@ -89,7 +89,7 @@ const rescheduleMissedBlock = async (block) => {
     intervalDay: block.intervalDay,
     priority: block.priority,
     color: block.color,
-    status: 'scheduled',
+    status: 'pending',
     completed: false,
     missed: false,
     notifiedOverdue: false,

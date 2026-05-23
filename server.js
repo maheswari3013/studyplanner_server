@@ -228,6 +228,7 @@ connectDB()
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
       startCronJobs();
+      require('./utils/markMissed');
       require('./utils/reminderScheduler');
     });
   })

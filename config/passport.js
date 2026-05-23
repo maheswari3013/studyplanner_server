@@ -5,7 +5,7 @@ const User = require('../models/User');
 const API_BASE_URL = process.env.API_BASE_URL || 'https://studyplanner-api-awmh.onrender.com';
 
 const buildCallbackUrl = (path) => {
-  const explicit = process.env[path.envName];
+  const explicit = process.env[path.envName] || (path.fallbackEnvName && process.env[path.fallbackEnvName]);
   if (explicit) return explicit;
   return `${API_BASE_URL}${path.route}`;
 };
@@ -46,7 +46,11 @@ passport.use('google-login', new GoogleStrategy({
 
 passport.use('google-calendar', new GoogleStrategy({
   ...googleConfig,
-  callbackURL: buildCallbackUrl({ envName: 'GOOGLE_CALENDAR_CALLBACK_URL', route: '/api/auth/google/calendar/callback' })
+  callbackURL: buildCallbackUrl({
+    envName: 'GOOGLE_CALENDAR_CALLBACK',
+    fallbackEnvName: 'GOOGLE_CALENDAR_CALLBACK_URL',
+    route: '/api/auth/google/calendar/callback'
+  })
 }, (accessToken, refreshToken, params, profile, done) => {
   return done(null, {
     profile,

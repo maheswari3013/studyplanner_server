@@ -24,6 +24,10 @@ const overlaps = (startTime, duration, block) => {
   return start < blockEnd && end > blockStart;
 };
 
+const getBlockStartDate = (block) => {
+  return new Date(`${block.date}T${block.time || block.startTime}:00+05:30`);
+};
+
 const calculateMakeupTime = async (originalBlock, userId) => {
   const now = new Date();
   const today = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
@@ -104,8 +108,9 @@ router.patch('/:id/missed', auth, async (req, res) => {
       priority: originalBlock.priority,
       color: originalBlock.color,
       status: 'makeup',
-      originalStartTime: originalBlock.startTime,
-      missedFromId: originalBlock._id
+      originalStartTime: getBlockStartDate(originalBlock),
+      missedFromId: originalBlock._id,
+      isRescheduled: true
     });
 
     res.json({

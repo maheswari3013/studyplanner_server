@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const { OAuth2Client } = require('google-auth-library');
+const { google } = require('googleapis');
 const jwt = require('jsonwebtoken');
 const authMiddleware = require('../middleware/auth');
 const User = require('../models/User');
@@ -103,10 +104,12 @@ router.get('/google/calendar/callback', async (req, res) => {
     }
     if (!userId) return res.status(400).send('Missing state');
 
-    const { tokens } = await client.getToken({
-      code,
-      redirect_uri: process.env.GOOGLE_CALENDAR_CALLBACK || googleCalendarCallbackUrl
-    });
+    const oauth2Client = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET,
+      process.env.GOOGLE_CALENDAR_CALLBACK || googleCalendarCallbackUrl
+    );
+    const { tokens } = await oauth2Client.getToken(code);
 
     const update = {
       googleAccessToken: tokens.access_token,

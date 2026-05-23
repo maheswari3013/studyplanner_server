@@ -27,7 +27,7 @@ const istToUtc = (timeStr) => {
 const getOAuth2Client = () => new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
-  process.env.GOOGLE_REDIRECT_URI || process.env.GOOGLE_CALLBACK_URL // Error 5: Fallback for env var
+  process.env.GOOGLE_CALENDAR_CALLBACK || process.env.GOOGLE_CALENDAR_CALLBACK_URL
 );
 
 const getGoogleErrorMessage = (err) => {
@@ -555,7 +555,7 @@ router.post('/generate', auth, async (req, res) => {
         color: s.color,
         completed: false,
         missed: false,
-        status: 'scheduled'
+        status: 'pending'
       }))
     );
 
@@ -821,7 +821,7 @@ router.patch('/:id/pending', auth, async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(400).json({ msg: 'Invalid block ID' });
     const block = await StudyBlock.findOneAndUpdate(
       { _id: req.params.id, user: req.user.id },
-      { $set: { completed: false, missed: false, status: 'scheduled' }, $unset: { completedAt: 1, missedAt: 1 } },
+      { $set: { completed: false, missed: false, status: 'pending' }, $unset: { completedAt: 1, missedAt: 1 } },
       { new: true }
     );
         if (!block) return res.status(404).json({ msg: 'Block not found' });
