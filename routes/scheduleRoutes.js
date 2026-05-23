@@ -23,6 +23,8 @@ const istToUtc = (timeStr) => {
   return `${String(utcH).padStart(2,'0')}:${String(utcM).padStart(2,'0')}`;
 };
 
+const frontendOrigin = process.env.FRONTEND_URL || 'https://studyplanner-client.vercel.app';
+
 const getOAuth2Client = () => new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
@@ -426,7 +428,7 @@ router.get('/auth/google/callback', async (req, res) => {
 
     res.send(`
       <script>
-        window.opener.postMessage({type:"GOOGLE_AUTH_SUCCESS"}, "*");
+        window.opener.postMessage({ type: 'google-auth-success' }, '${frontendOrigin}');
         window.close();
       </script>
       <h2>Connected! You can close this window.</h2>
@@ -435,10 +437,10 @@ router.get('/auth/google/callback', async (req, res) => {
     console.error('Google auth error:', err.response?.data || err.message);
     res.status(500).send(`
       <script>
-        window.opener.postMessage({type:"GOOGLE_AUTH_ERROR", error:"${err.message}"}, "*");
+        window.opener.postMessage({ type: 'google-auth-error', error: '${String(err.message).replace(/'/g, "\\'")}' }, '*');
         window.close();
       </script>
-      <h2>Auth failed</h2><p>${err.message}</p>
+      <h2>Auth failed</h2><p>${String(err.message)}</p>
     `);
   }
 });
@@ -638,9 +640,11 @@ router.post('/google/sync', auth, syncLimiter, async (req, res) => {
     } catch (googleErr) {
       console.error('Google sync error:', googleErr);
       const errorCode = googleErr?.response?.data?.error || googleErr?.code || googleErr?.message;
-      if (String(errorCode).includes('invalid_grant')) {
-        await User.findByIdAndUpdate(req.user.id, { $unset: { googleTokens: '' } });
-        return res.status(400).json({ success: false, msg: 'Google not connected', needsAuth: true });
+      const invalidGrant = String(errorCode).includes('invalid_grant');
+      const unauthorized = googleErr?.code === 401 || String(errorCode) === '401';
+      if (invalidGrant || unauthorized) {
+        await User.findByIdAndUpdate(req.user.id, { $unset: { googleTokens: 1 } });
+        return res.status(400).json({ success: false, msg: 'Token expired', needsAuth: true });
       }
       return res.status(500).json({ success: false, msg: 'Sync failed', error: googleErr.message });
     }
@@ -697,7 +701,7 @@ router.patch('/exams/:id/confidence', auth, async (req, res) => {
 
 // ===== PARAMETERIZED ROUTES LAST =====
 
-router.patch('/:id/complete', auth, async (req, res) => {
+const completeBlockHandler = async (req, res) => {
   try {
     console.log('Completing block:', req.params.id);
 
@@ -708,18 +712,20 @@ router.patch('/:id/complete', auth, async (req, res) => {
     );
 
     if (!block) {
-      console.log('Block not found');
+      console.log('Block not found:', req.params.id);
       return res.status(404).json({ msg: 'Block not found' });
     }
 
     console.log('Block completed:', block._id);
-    res.json(block);
-
+    return res.json(block);
   } catch (err) {
     console.error('Complete route error:', err);
-    res.status(500).json({ msg: err.message });
+    return res.status(500).json({ msg: err.message });
   }
-});
+};
+
+router.patch('/:id/complete', auth, completeBlockHandler);
+router.post('/:id/complete', auth, completeBlockHandler);
 
 const rescheduleMissedTopic = async (block, exam, userId) => {
   if (!exam) return 0;
@@ -767,7 +773,7 @@ const rescheduleMissedTopic = async (block, exam, userId) => {
   return 1;
 };
 
-router.patch('/:id/missed', auth, async (req, res) => {
+const missedBlockHandler = async (req, res) => {
   try {
     const block = await StudyBlock.findOne({ _id: req.params.id, user: req.user._id });
 
@@ -782,17 +788,19 @@ router.patch('/:id/missed', auth, async (req, res) => {
     const exam = await Exam.findById(block.examId);
     const newBlocksCreated = await rescheduleMissedTopic(block, exam, req.user._id);
 
-    res.json({
+    return res.json({
       success: true,
       msg: 'Marked as missed and rescheduled',
       newBlocksCreated
     });
-
   } catch (err) {
     console.error('Missed route error:', err);
-    res.status(500).json({ success: false, msg: err.message });
+    return res.status(500).json({ success: false, msg: err.message });
   }
-});
+};
+
+router.patch('/:id/missed', auth, missedBlockHandler);
+router.post('/:id/missed', auth, missedBlockHandler);
 
 router.post('/:id/start', auth, async (req, res) => {
   try {

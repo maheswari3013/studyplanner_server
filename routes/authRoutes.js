@@ -2,10 +2,19 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { google } = require('googleapis');
 const User = require('../models/User');
 const OTP = require('../models/OTP');
 const auth = require('../middleware/auth');
 const { sendOTPEmail } = require('../utils/sendEmail');
+
+const frontendOrigin = process.env.FRONTEND_URL || 'https://studyplanner-client.vercel.app';
+const getOAuth2Client = () => new google.auth.OAuth2(
+  process.env.GOOGLE_CLIENT_ID,
+  process.env.GOOGLE_CLIENT_SECRET,
+  process.env.GOOGLE_REDIRECT_URI || process.env.GOOGLE_CALLBACK_URL
+);
+
 
 const validatePassword = (password) => {
   const regex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{6,}$/;
@@ -361,6 +370,46 @@ router.patch('/confirm-email-change', auth, async (req, res) => {
   } catch (err) {
     console.error('Confirm email change error:', err.message);
     res.status(500).json({ msg: 'Server error' });
+  }
+});
+
+router.get('/google/callback', async (req, res) => {
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+  res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
+
+  try {
+    const { code, state } = req.query;
+    if (!code || !state) {
+      return res.status(400).send(`
+        <script>
+          window.opener.postMessage({ type: 'google-auth-error', error: 'Missing code or state' }, '*');
+          window.close();
+        </script>
+        <h2>Missing code or state</h2>
+      `);
+    }
+
+    const oauth2Client = getOAuth2Client();
+    const { tokens } = await oauth2Client.getToken(code);
+    await User.findByIdAndUpdate(state, { googleTokens: tokens });
+
+    res.send(`
+      <script>
+        window.opener.postMessage({ type: 'google-auth-success' }, '${frontendOrigin}');
+        window.close();
+      </script>
+      <h2>Connected! You can close this window.</h2>
+    `);
+  } catch (err) {
+    console.error('Auth callback error:', err.response?.data || err.message);
+    const errorMessage = String(err.message).replace(/'/g, "\\'");
+    res.status(500).send(`
+      <script>
+        window.opener.postMessage({ type: 'google-auth-error', error: '${errorMessage}' }, '*');
+        window.close();
+      </script>
+      <h2>Auth failed</h2><p>${errorMessage}</p>
+    `);
   }
 });
 
