@@ -39,13 +39,16 @@ function timeToMinutes(time) {
   return h * 60 + m;
 }
 
-const isTimeOccupied = (date, startTime, duration, existingBlocks) => {
+const isTimeOccupied = (date, startTime, duration, existingBlocks = [], daySessions = []) => {
   const startMin = timeToMinutes(startTime);
   const endMin = startMin + duration;
-  return existingBlocks.some(b => {
-    if (b.date!== date) return false;
+  const blocksToCheck = [...existingBlocks, ...daySessions];
+  return blocksToCheck.some(b => {
+    if (b.date !== date) return false;
     if (b.status === 'missed' || b.status === 'overdue') return false;
-    const bStart = timeToMinutes(b.time);
+    const blockTime = b.time || b.startTime;
+    if (!blockTime) return false;
+    const bStart = timeToMinutes(blockTime);
     const bEnd = bStart + b.duration;
     return startMin < bEnd && endMin > bStart;
   });
@@ -255,7 +258,7 @@ function generateSchedule(exams, config, existingBlocks = []) {
         const actualStudyMinutes = Math.round(actualStudyHours * 60);
         if (actualStudyMinutes < MIN_BLOCK_HOURS * 60) break;
 
-        if (isTimeOccupied(day.date, currentTime, actualStudyMinutes, existingBlocks)) {
+        if (isTimeOccupied(day.date, currentTime, actualStudyMinutes, existingBlocks, day.sessions)) {
           currentTime = addMinutesToTime(currentTime, 10, endHour, startHour);
           if (!currentTime) break;
           continue;
@@ -287,7 +290,7 @@ function generateSchedule(exams, config, existingBlocks = []) {
           const breakEndTime = addMinutesToTime(currentTime, breakMinutes, endHour, startHour);
           if (!breakEndTime) break;
 
-          if (!isTimeOccupied(day.date, currentTime, breakMinutes, existingBlocks)) {
+          if (!isTimeOccupied(day.date, currentTime, breakMinutes, existingBlocks, day.sessions)) {
             day.sessions.push({
               type: 'Break',
               examId: topic.examId,

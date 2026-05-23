@@ -593,40 +593,60 @@ router.post('/generate', auth, async (req, res) => {
 router.post('/google/sync', auth, syncLimiter, async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
-    if (!user.googleTokens?.refresh_token) return res.status(400).json({ msg: 'Connect Google Calendar first', needsAuth: true });
+    if (!user.googleTokens || !user.googleTokens.access_token || !user.googleTokens.refresh_token) {
+      return res.status(400).json({ success: false, msg: 'Google not connected', needsAuth: true });
+    }
+
     const oauth2Client = getOAuth2Client();
     oauth2Client.setCredentials(user.googleTokens);
-    const { credentials } = await oauth2Client.refreshAccessToken();
-    await User.findByIdAndUpdate(req.user.id, { googleTokens: credentials });
-    oauth2Client.setCredentials(credentials);
-    const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
-    const blocks = await StudyBlock.find({ user: req.user.id, isBreak: false, missed: false, completed: false });
-    let synced = 0, errors = 0;
-    for (const block of blocks) {
-      const start = new Date(`${block.date}T${block.time}:00+05:30`);
-      const end = new Date(start);
-      end.setMinutes(end.getMinutes() + block.duration);
-      const eventData = {
-        summary: `${block.subject} - ${block.topic}`,
-        description: `StudySync: ${block.type}\nPriority: ${block.priority}\nDuration: ${block.duration}min`,
-        start: { dateTime: start.toISOString(), timeZone: 'Asia/Kolkata' },
-        end: { dateTime: end.toISOString(), timeZone: 'Asia/Kolkata' },
-        colorId: block.priority === 1? '11' : block.type === 'Review'? '5' : '7',
-        extendedProperties: { private: { studySyncId: block._id.toString() } }
-      };
-      try {
-        const existing = await calendar.events.list({ calendarId: 'primary', privateExtendedProperty: `studySyncId=${block._id.toString()}`, maxResults: 1 });
-        if (existing.data.items.length > 0) {
-          await calendar.events.update({ calendarId: 'primary', eventId: existing.data.items[0].id, requestBody: eventData });
-        } else {
-          await calendar.events.insert({ calendarId: 'primary', requestBody: eventData });
+
+    try {
+      const refreshResult = await oauth2Client.refreshAccessToken();
+      const credentials = refreshResult?.credentials || refreshResult;
+      await User.findByIdAndUpdate(req.user.id, { googleTokens: credentials });
+      oauth2Client.setCredentials(credentials);
+
+      const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+      const blocks = await StudyBlock.find({ user: req.user.id, isBreak: false, missed: false, completed: false });
+      let synced = 0, errors = 0;
+      for (const block of blocks) {
+        const start = new Date(`${block.date}T${block.time}:00+05:30`);
+        const end = new Date(start);
+        end.setMinutes(end.getMinutes() + block.duration);
+        const eventData = {
+          summary: `${block.subject} - ${block.topic}`,
+          description: `StudySync: ${block.type}\nPriority: ${block.priority}\nDuration: ${block.duration}min`,
+          start: { dateTime: start.toISOString(), timeZone: 'Asia/Kolkata' },
+          end: { dateTime: end.toISOString(), timeZone: 'Asia/Kolkata' },
+          colorId: block.priority === 1? '11' : block.type === 'Review'? '5' : '7',
+          extendedProperties: { private: { studySyncId: block._id.toString() } }
+        };
+        try {
+          const existing = await calendar.events.list({ calendarId: 'primary', privateExtendedProperty: `studySyncId=${block._id.toString()}`, maxResults: 1 });
+          if (existing.data.items.length > 0) {
+            await calendar.events.update({ calendarId: 'primary', eventId: existing.data.items[0].id, requestBody: eventData });
+          } else {
+            await calendar.events.insert({ calendarId: 'primary', requestBody: eventData });
+          }
+          synced++;
+        } catch (e) {
+          console.error('Google event sync error:', e);
+          errors++;
         }
-        synced++;
-      } catch (e) { errors++; }
+      }
+      return res.json({ success: true, msg: `Synced ${synced} events${errors > 0? `, ${errors} failed` : ''}` });
+    } catch (googleErr) {
+      console.error('Google sync error:', googleErr);
+      const errorCode = googleErr?.response?.data?.error || googleErr?.code || googleErr?.message;
+      if (String(errorCode).includes('invalid_grant')) {
+        await User.findByIdAndUpdate(req.user.id, { $unset: { googleTokens: '' } });
+        return res.status(400).json({ success: false, msg: 'Google not connected', needsAuth: true });
+      }
+      return res.status(500).json({ success: false, msg: 'Sync failed', error: googleErr.message });
     }
-    res.json({ success: true, msg: `Synced ${synced} events${errors > 0? `, ${errors} failed` : ''}` });
   } catch (err) {
-    res.status(500).json({ msg: 'Sync failed', error: err.message });
+    console.error('Google sync route error:', err);
+    res.status(500).json({ success: false, msg: 'Sync failed', error: err.message });
   }
 });
 
