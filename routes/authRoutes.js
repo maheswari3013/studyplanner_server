@@ -351,24 +351,9 @@ router.post('/change-password', auth, async (req, res) => {
 
 // POST /api/auth/request-email-change - Step 1: Send OTP to current email
 router.post('/request-email-change', auth, async (req, res) => {
-  let { newEmail } = req.body;
-  if (!newEmail) return res.status(400).json({ msg: 'New email is required' });
-
-  newEmail = newEmail.toLowerCase().trim();
-  
   try {
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ msg: 'User not found' });
-    
-    const currentEmail = user.email.toLowerCase().trim();
-    if (newEmail === currentEmail) {
-      return res.status(400).json({ msg: 'This is already your current email address. Please enter a different email.' });
-    }
-    
-    const existing = await User.findOne({ email: newEmail });
-    if (existing) {
-      return res.status(400).json({ msg: 'This email is already logged in with a different account. Please try again with another email.' });
-    }
 
     await OTP.deleteMany({ userId: user.id, type: { $in: ['email-change-old', 'email-change-new'] } });
 
@@ -377,13 +362,12 @@ router.post('/request-email-change', auth, async (req, res) => {
     await OTP.create({
       userId: user.id,
       email: user.email,
-      newEmail,
       otp: oldEmailOtp,
       type: 'email-change-old'
     });
 
     try {
-      await sendOTPEmail(user.email, oldEmailOtp, 'email-change-old', { newEmail });
+      await sendOTPEmail(user.email, oldEmailOtp, 'email-change-old');
       res.json({ success: true, msg: 'OTP sent to current email' });
     } catch (emailErr) {
       console.error('SendOTP Error:', emailErr.message);
@@ -402,24 +386,42 @@ router.post('/request-email-change', auth, async (req, res) => {
 
 // POST /api/auth/verify-old-email - Step 2: Verify old email + send OTP to new email
 router.post('/verify-old-email', auth, async (req, res) => {
-  const { otp } = req.body;
+  let { otp, newEmail } = req.body;
+  if (!otp || !newEmail) {
+    return res.status(400).json({ msg: 'OTP and new email are required' });
+  }
+
+  newEmail = newEmail.toLowerCase().trim();
   
   try {
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ msg: 'User not found' });
+
+    const currentEmail = user.email.toLowerCase().trim();
+    if (newEmail === currentEmail) {
+      return res.status(400).json({ msg: 'This is already your current email address. Please enter a different email.' });
+    }
+
+    const existing = await User.findOne({ email: newEmail });
+    if (existing) {
+      return res.status(400).json({ msg: 'This email is already logged in with a different account. Please try again with another email.' });
+    }
+
     const oldOtpDoc = await OTP.findOne({ userId: req.user.id, otp, type: 'email-change-old' });
-    if (!oldOtpDoc) return res.status(400).json({ msg: 'Invalid or expired OTP' });
+    if (!oldOtpDoc) return res.status(400).json({ msg: 'Invalid or expired verification code' });
 
     const newEmailOtp = Math.floor(100000 + Math.random() * 900000).toString();
 
     await OTP.create({
       userId: req.user.id,
-      email: oldOtpDoc.newEmail,
+      email: newEmail,
       otp: newEmailOtp,
       type: 'email-change-new',
-      newEmail: oldOtpDoc.newEmail
+      newEmail: newEmail
     });
 
     try {
-      await sendOTPEmail(oldOtpDoc.newEmail, newEmailOtp, 'email-change-new');
+      await sendOTPEmail(newEmail, newEmailOtp, 'email-change-new');
       res.json({ success: true, msg: 'OTP sent to new email' });
     } catch (emailErr) {
       console.error('SendOTP Error:', emailErr.message);
