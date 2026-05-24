@@ -35,6 +35,22 @@ const overlaps = (start, duration, block) => {
   return startMin < blockEnd && endMin > blockStart;
 };
 
+const overlapsWithBreakBuffer = (start, duration, existing) => {
+  const startMin = timeToMinutes(start);
+  const endMin = startMin + duration;
+  const existingStart = timeToMinutes(existing.time);
+  const existingEnd = existingStart + existing.duration;
+
+  // If either block is a break, we only require no strict overlap (no buffer needed)
+  if (existing.isBreak || existing.type === 'Break') {
+    return startMin < existingEnd && endMin > existingStart;
+  }
+
+  // For two study blocks, we require a 10-minute break between them
+  const buffer = 10;
+  return startMin < (existingEnd + buffer) && (endMin + buffer) > existingStart;
+};
+
 const findSameDaySlot = async (block) => {
   const now = new Date();
   const today = toISTDateString(now);
@@ -60,7 +76,7 @@ const findSameDaySlot = async (block) => {
 
   for (let candidate = dayStart; candidate + block.duration <= 23 * 60; candidate += 10) {
     const time = minutesToTime(candidate);
-    if (!existingBlocks.some(existing => overlaps(time, block.duration, existing))) {
+    if (!existingBlocks.some(existing => overlapsWithBreakBuffer(time, block.duration, existing))) {
       return { date: targetDate, time };
     }
   }
@@ -149,6 +165,18 @@ const missBlock = async (req, res) => {
     if (!block) return res.status(404).json({ success: false, msg: 'Block not found' });
     if (block.completed) return res.status(400).json({ success: false, msg: 'Already completed' });
     if (block.missed || block.status === 'missed') return res.status(400).json({ success: false, msg: 'Already marked as missed' });
+
+    // Find and delete the relatable break block starting at the end of the study session
+    const [sh, sm] = block.time.split(':').map(Number);
+    const endMinutes = sh * 60 + sm + block.duration;
+    const breakTimeStr = `${String(Math.floor(endMinutes / 60)).padStart(2, '0')}:${String(endMinutes % 60).padStart(2, '0')}`;
+
+    await StudyBlock.deleteOne({
+      user: block.user,
+      date: block.date,
+      time: breakTimeStr,
+      isBreak: true
+    });
 
     const result = await markMissedAndReschedule(block, 'missed');
     return res.json({

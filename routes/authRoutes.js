@@ -41,7 +41,7 @@ router.post('/register', async (req, res) => {
     }
 
     let user = await User.findOne({ email });
-    if (user) return res.status(400).json({ msg: 'User already exists' });
+    if (user && user.password) return res.status(400).json({ msg: 'User already exists' });
 
     await OTP.deleteMany({ email, type: 'register' });
 
@@ -80,12 +80,19 @@ router.post('/verify-register', async (req, res) => {
     const otpDoc = await OTP.findOne({ email, otp, type: 'register' });
     if (!otpDoc) return res.status(400).json({ msg: 'Invalid or expired OTP' });
 
-    const user = new User({
-      username: otpDoc.username,
-      email: otpDoc.email,
-      password: otpDoc.password
-    });
-    await user.save();
+    let user = await User.findOne({ email });
+    if (user) {
+      user.password = otpDoc.password;
+      user.username = otpDoc.username || user.username;
+      await user.save();
+    } else {
+      user = new User({
+        username: otpDoc.username,
+        email: otpDoc.email,
+        password: otpDoc.password
+      });
+      await user.save();
+    }
     await OTP.deleteMany({ email, type: 'register' });
 
     const payload = { id: user._id, email: user.email, role: user.role };
