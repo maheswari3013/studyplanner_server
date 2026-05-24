@@ -1,5 +1,12 @@
-const sgMail = require('@sendgrid/mail');
-sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+const nodemailer = require('nodemailer');
+
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS
+  }
+});
 
 const sendOTPEmail = async (email, otp, type = 'register', extra = {}) => {
   const templates = {
@@ -54,22 +61,14 @@ const sendOTPEmail = async (email, otp, type = 'register', extra = {}) => {
 
   const template = templates[type] || templates.register;
   
-  const msg = {
+  const mailOptions = {
+    from: `"StudyPlanner" <${process.env.EMAIL_USER}>`,
     to: email,
-    from: {
-      email: 'dmahi3224@gmail.com',
-      name: 'StudyPlanner'
-    },
     subject: template.subject,
-    html: template.html,
-    tracking_settings: {
-      click_tracking: { enable: false },
-      open_tracking: { enable: false },
-      subscription_tracking: { enable: false }
-    }
+    html: template.html
   };
   
-  await sgMail.send(msg);
+  await transporter.sendMail(mailOptions);
 };
 
 module.exports = { sendOTPEmail };
