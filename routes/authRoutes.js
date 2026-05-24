@@ -449,7 +449,9 @@ router.patch('/confirm-email-change', auth, async (req, res) => {
     const userObj = user.toObject();
     userObj.hasPassword = !!user.password;
     delete userObj.password;
-    res.json(userObj);
+
+    const token = signToken(user);
+    res.json({ token, user: userObj });
   } catch (err) {
     console.error('Confirm email change error:', err.message);
     res.status(500).json({ msg: 'Server error' });

@@ -10,7 +10,7 @@ const StudyBlock = require('../models/StudyBlock');
 const { generateSchedule } = require('../utils/scheduler');
 const rateLimit = require('express-rate-limit');
 const PDFDocument = require('pdfkit');
-const { completeBlock, missBlock } = require('../controllers/scheduleController');
+const { completeBlock, missBlock, removeConsecutiveBreaks } = require('../controllers/scheduleController');
 
 const pdfLimiter = rateLimit({ windowMs: 60 * 1000, max: 5, message: { msg: 'Too many PDF exports. Try again in 1 minute.' } });
 const syncLimiter = rateLimit({ windowMs: 60 * 1000, max: 3, message: { msg: 'Too many syncs. Try again in 1 minute.' } });
@@ -847,7 +847,9 @@ router.patch('/:id/pending', auth, async (req, res) => {
       { $set: { completed: false, missed: false, status: 'pending' }, $unset: { completedAt: 1, missedAt: 1 } },
       { new: true }
     );
-        if (!block) return res.status(404).json({ msg: 'Block not found' });
+    if (!block) return res.status(404).json({ msg: 'Block not found' });
+    
+    await removeConsecutiveBreaks(block.user, block.date);
     res.json(block);
   } catch (err) {
     console.error('Pending error:', err);
@@ -870,6 +872,8 @@ router.patch('/:id', auth, async (req, res) => {
       { new: true, runValidators: true }
     );
     if (!block) return res.status(404).json({ msg: 'Block not found' });
+    
+    await removeConsecutiveBreaks(block.user, block.date);
     res.json(block);
   } catch (err) {
     console.error('Update error:', err);
@@ -882,6 +886,8 @@ router.delete('/:id', auth, async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(400).json({ msg: 'Invalid block ID' });
     const block = await StudyBlock.findOneAndDelete({ _id: req.params.id, user: req.user.id });
     if (!block) return res.status(404).json({ msg: 'Block not found' });
+    
+    await removeConsecutiveBreaks(block.user, block.date);
     res.json({ msg: 'Block deleted' });
   } catch (err) {
     console.error('Delete block error:', err);
