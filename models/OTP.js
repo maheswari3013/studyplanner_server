@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 
 const OTPSchema = new mongoose.Schema({
   username: { type: String },
-  email: { type: String, required: true },
+  email: { type: String, required: true, lowercase: true, trim: true },
   password: { type: String },
   otp: { type: String, required: true },
   type: {
@@ -11,7 +11,7 @@ const OTPSchema = new mongoose.Schema({
     required: true
   },
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-  newEmail: { type: String },
+  newEmail: { type: String, lowercase: true, trim: true },
   createdAt: { type: Date, default: Date.now, expires: 600 } // 10 min expiry
 });
 

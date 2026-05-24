@@ -351,12 +351,17 @@ router.post('/change-password', auth, async (req, res) => {
 
 // POST /api/auth/request-email-change - Step 1: Send OTP to current email
 router.post('/request-email-change', auth, async (req, res) => {
-  const { newEmail } = req.body;
+  let { newEmail } = req.body;
+  if (!newEmail) return res.status(400).json({ msg: 'New email is required' });
+
+  newEmail = newEmail.toLowerCase().trim();
   
   try {
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ msg: 'User not found' });
-    if (newEmail === user.email) return res.status(400).json({ msg: 'Same as current email' });
+    
+    const currentEmail = user.email.toLowerCase().trim();
+    if (newEmail === currentEmail) return res.status(400).json({ msg: 'Same as current email' });
     
     const existing = await User.findOne({ email: newEmail });
     if (existing) return res.status(400).json({ msg: 'Email already in use' });
