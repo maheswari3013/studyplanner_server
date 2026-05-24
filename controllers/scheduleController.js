@@ -51,6 +51,50 @@ const overlapsWithBreakBuffer = (start, duration, existing) => {
   return startMin < (existingEnd + buffer) && (endMin + buffer) > existingStart;
 };
 
+const removeConsecutiveBreaks = async (userId, date) => {
+  try {
+    const blocks = await StudyBlock.find({
+      user: userId,
+      date: date,
+      missed: false,
+      status: { $ne: 'missed' }
+    }).sort({ time: 1 });
+
+    const invalidBreakIds = [];
+    let lastWasBreak = true;
+
+    for (let i = 0; i < blocks.length; i++) {
+      const current = blocks[i];
+      const isCurrentBreak = current.isBreak || current.type === 'Break';
+
+      if (isCurrentBreak) {
+        if (lastWasBreak) {
+          invalidBreakIds.push(current._id);
+        } else {
+          lastWasBreak = true;
+        }
+      } else {
+        lastWasBreak = false;
+      }
+    }
+
+    const remainingBlocks = blocks.filter(b => !invalidBreakIds.includes(b._id));
+    if (remainingBlocks.length > 0) {
+      const lastBlock = remainingBlocks[remainingBlocks.length - 1];
+      if (lastBlock.isBreak || lastBlock.type === 'Break') {
+        invalidBreakIds.push(lastBlock._id);
+      }
+    }
+
+    if (invalidBreakIds.length > 0) {
+      await StudyBlock.deleteMany({ _id: { $in: invalidBreakIds } });
+      console.log(`Cleaned up ${invalidBreakIds.length} invalid/consecutive break blocks on ${date}`);
+    }
+  } catch (err) {
+    console.error('Error removing consecutive breaks:', err);
+  }
+};
+
 const findSameDaySlot = async (block) => {
   const now = new Date();
   const today = toISTDateString(now);
@@ -152,6 +196,7 @@ const completeBlock = async (req, res) => {
     );
 
     if (!block) return res.status(404).json({ msg: 'Block not found' });
+    await removeConsecutiveBreaks(block.user, block.date);
     return res.json(block);
   } catch (err) {
     console.error('Complete route error:', err);
@@ -179,6 +224,10 @@ const missBlock = async (req, res) => {
     });
 
     const result = await markMissedAndReschedule(block, 'missed');
+    await removeConsecutiveBreaks(block.user, block.date);
+    if (result.newBlock) {
+      await removeConsecutiveBreaks(block.user, result.newBlock.date);
+    }
     return res.json({
       success: true,
       msg: result.newBlock ? 'Marked as missed and rescheduled' : 'Marked as missed',
@@ -208,7 +257,12 @@ const markPastPendingBlocksOverdue = async () => {
     const blockEnd = new Date(`${block.date}T${block.time}:00+05:30`);
     blockEnd.setMinutes(blockEnd.getMinutes() + block.duration);
     if (now > blockEnd) {
-      results.push(await markMissedAndReschedule(block, 'overdue'));
+      const res = await markMissedAndReschedule(block, 'overdue');
+      results.push(res);
+      await removeConsecutiveBreaks(block.user, block.date);
+      if (res.newBlock) {
+        await removeConsecutiveBreaks(block.user, res.newBlock.date);
+      }
     }
   }
 
@@ -220,5 +274,6 @@ module.exports = {
   missBlock,
   markMissedAndReschedule,
   markPastPendingBlocksOverdue,
-  rescheduleMissedBlock
+  rescheduleMissedBlock,
+  removeConsecutiveBreaks
 };
