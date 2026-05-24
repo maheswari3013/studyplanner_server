@@ -361,10 +361,14 @@ router.post('/request-email-change', auth, async (req, res) => {
     if (!user) return res.status(404).json({ msg: 'User not found' });
     
     const currentEmail = user.email.toLowerCase().trim();
-    if (newEmail === currentEmail) return res.status(400).json({ msg: 'Same as current email' });
+    if (newEmail === currentEmail) {
+      return res.status(400).json({ msg: 'This is already your current email address. Please enter a different email.' });
+    }
     
     const existing = await User.findOne({ email: newEmail });
-    if (existing) return res.status(400).json({ msg: 'Email already in use' });
+    if (existing) {
+      return res.status(400).json({ msg: 'This email is already logged in with a different account. Please try again with another email.' });
+    }
 
     await OTP.deleteMany({ userId: user.id, type: { $in: ['email-change-old', 'email-change-new'] } });
 
