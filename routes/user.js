@@ -13,13 +13,9 @@ router.get('/me', auth, async (req, res) => {
     const user = await User.findById(req.user._id).select('-password');
     if (!user) return res.status(404).json({ msg: 'User not found' });
 
-    res.json({
-      _id: user._id,
-      email: user.email,
-      name: user.name || user.username,
-      googleId: user.googleId,
-      hasCalendar: !!user.googleRefreshToken
-    });
+    const userObj = user.toObject();
+    userObj.hasCalendar = !!user.googleRefreshToken;
+    res.json(userObj);
   } catch (err) {
     console.error('User me error:', err.message);
     res.status(500).json({ msg: 'Server error' });
