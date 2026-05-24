@@ -99,7 +99,8 @@ router.post('/verify-register', async (req, res) => {
           _id: user._id,
           username: user.username,
           email: user.email,
-          theme: user.theme
+          theme: user.theme,
+          hasPassword: !!user.password
         };
         res.json({ token, user: userData });
       }
@@ -134,7 +135,8 @@ router.post('/login', async (req, res) => {
           username: user.username,
           email: user.email,
           theme: user.theme,
-          role: user.role
+          role: user.role,
+          hasPassword: !!user.password
         };
         res.json({ token, user: userData });
       }
@@ -205,9 +207,12 @@ router.post('/reset-password', async (req, res) => {
 // GET /api/auth/user
 router.get('/user', auth, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select('-password');
+    const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ msg: 'User not found' });
-    res.json(user);
+    const userObj = user.toObject();
+    userObj.hasPassword = !!user.password;
+    delete userObj.password;
+    res.json(userObj);
   } catch (err) {
     console.error(err.message);
     res.status(500).send('Server Error');
@@ -291,10 +296,13 @@ router.patch('/profile', auth, async (req, res) => {
       req.user.id,
       { $set: updateData },
       { new: true, runValidators: true }
-    ).select('-password');
+    );
 
     if (!user) return res.status(404).json({ msg: 'User not found' });
-    res.json(user);
+    const userObj = user.toObject();
+    userObj.hasPassword = !!user.password;
+    delete userObj.password;
+    res.json(userObj);
   } catch (err) {
     console.error('Update profile error:', err);
     if (err.name === 'ValidationError') {
@@ -312,9 +320,11 @@ router.post('/change-password', auth, async (req, res) => {
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ msg: 'User not found' });
 
-    const isMatch = await bcrypt.compare(currentPassword, user.password);
-    if (!isMatch) {
-      return res.status(400).json({ msg: 'Current password is incorrect' });
+    if (user.password) {
+      const isMatch = await bcrypt.compare(currentPassword, user.password);
+      if (!isMatch) {
+        return res.status(400).json({ msg: 'Current password is incorrect' });
+      }
     }
 
     if (!validatePassword(newPassword)) {
@@ -426,10 +436,13 @@ router.patch('/confirm-email-change', auth, async (req, res) => {
       req.user.id,
       { email: newOtpDoc.newEmail },
       { new: true }
-    ).select('-password');
+    );
 
     await OTP.deleteMany({ userId: req.user.id, type: { $in: ['email-change-old', 'email-change-new'] } });
-    res.json(user);
+    const userObj = user.toObject();
+    userObj.hasPassword = !!user.password;
+    delete userObj.password;
+    res.json(userObj);
   } catch (err) {
     console.error('Confirm email change error:', err.message);
     res.status(500).json({ msg: 'Server error' });

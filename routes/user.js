@@ -10,11 +10,13 @@ const User = require('../models/User');
 // GET /api/user/me - Current user profile summary
 router.get('/me', auth, async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).select('-password');
+    const user = await User.findById(req.user._id);
     if (!user) return res.status(404).json({ msg: 'User not found' });
 
     const userObj = user.toObject();
     userObj.hasCalendar = !!user.googleRefreshToken;
+    userObj.hasPassword = !!user.password;
+    delete userObj.password;
     res.json(userObj);
   } catch (err) {
     console.error('User me error:', err.message);

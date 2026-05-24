@@ -410,8 +410,13 @@ router.get('/google/status', auth, async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
     const credentials = getStoredGoogleCredentials(user);
+    const hasCalendarScope = !!(
+      user.googleTokens?.scope && 
+      (user.googleTokens.scope.includes('auth/calendar') || 
+       user.googleTokens.scope.includes('auth/calendar.events'))
+    );
     res.json({
-      connected: !!credentials.refresh_token
+      connected: !!credentials.refresh_token && hasCalendarScope
     });
   } catch (err) {
     res.status(500).json({ connected: false });
@@ -646,7 +651,8 @@ router.post('/google/sync', auth, syncLimiter, async (req, res) => {
       const errorCode = googleErr?.response?.data?.error || googleErr?.code || googleMessage;
       const invalidGrant = String(errorCode).includes('invalid_grant');
       const unauthorized = googleErr?.code === 401 || String(errorCode) === '401';
-      if (invalidGrant || unauthorized) {
+      const isScopeError = googleErr?.code === 403 || String(googleErr?.code) === '403' || String(googleMessage).toLowerCase().includes('scope');
+      if (invalidGrant || unauthorized || isScopeError) {
         await User.findByIdAndUpdate(req.user.id, { $unset: { googleTokens: 1, googleAccessToken: 1, googleRefreshToken: 1, googleTokenExpiry: 1 } });
         return res.status(400).json({ success: false, msg: googleMessage, needsAuth: true });
       }
@@ -717,8 +723,25 @@ router.get('/google/sync', auth, syncLimiter, async (req, res) => {
 
     res.json({ success: true, synced: events.length });
   } catch (err) {
+    const googleMessage = getGoogleErrorMessage(err);
     console.error('Google Calendar GET sync error:', err.response?.data || err.message);
-    res.status(500).json({ success: false, message: getGoogleErrorMessage(err) });
+    const errorCode = err?.response?.data?.error || err?.code || googleMessage;
+    const invalidGrant = String(errorCode).includes('invalid_grant');
+    const unauthorized = err?.code === 401 || String(errorCode) === '401';
+    const isScopeError = err?.code === 403 || String(err?.code) === '403' || String(googleMessage).toLowerCase().includes('scope');
+    
+    if (invalidGrant || unauthorized || isScopeError) {
+      await User.findByIdAndUpdate(req.user._id || req.user.id, {
+        $unset: {
+          googleTokens: 1,
+          googleAccessToken: 1,
+          googleRefreshToken: 1,
+          googleTokenExpiry: 1
+        }
+      });
+      return res.status(400).json({ success: false, message: googleMessage, needsAuth: true });
+    }
+    res.status(err?.code >= 400 && err.code < 500 ? err.code : 500).json({ success: false, message: googleMessage });
   }
 });
 
